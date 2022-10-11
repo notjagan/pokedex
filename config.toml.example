@@ -1,0 +1,5 @@
+[discord]
+    token = "<Discord API token>"
+
+[database]
+    path = "db.sqlite3"
