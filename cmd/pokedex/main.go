@@ -1,41 +1,36 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type config struct {
 	Discord struct {
-		Token string
-	}
+		Token string `toml:"token"`
+	} `toml:"discord"`
 	DB struct {
-		Path string
-	}
+		Path string `toml:"path"`
+	} `toml:"database"`
 }
 
 const ConfigFile = "config.toml"
 
-func hostBot(cfg config) error {
-	_, err := sql.Open("sqlite3", cfg.DB.Path)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func main() {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	var cfg config
 	_, err := toml.DecodeFile(ConfigFile, &cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = hostBot(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
+	_ = ctx
 }
