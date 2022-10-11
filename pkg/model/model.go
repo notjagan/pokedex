@@ -15,9 +15,14 @@ type Model struct {
 }
 
 func Open(ctx context.Context, dbPath string) (*Model, error) {
-	db, err := sqlx.Open("sqlite3", dbPath)
+	db, err := sqlx.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro", dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	err = db.PingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read from database: %w", err)
 	}
 	m := &Model{db: db}
 
