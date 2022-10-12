@@ -14,7 +14,7 @@ type Model struct {
 	language *Language
 }
 
-func Open(ctx context.Context, dbPath string) (*Model, error) {
+func New(ctx context.Context, dbPath string) (*Model, error) {
 	db, err := sqlx.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro", dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -24,14 +24,7 @@ func Open(ctx context.Context, dbPath string) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to read from database: %w", err)
 	}
-	m := &Model{db: db}
-
-	err = m.SetLanguage(ctx, LocalizationCodeEnglish)
-	if err != nil {
-		return nil, fmt.Errorf("default locale not found: %w", err)
-	}
-
-	return m, nil
+	return &Model{db: db}, nil
 }
 
 func (m *Model) Close() error {
