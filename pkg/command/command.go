@@ -116,6 +116,9 @@ var ErrCommandFormat = errors.New("invalid command format")
 
 func Set(minGen int, maxGen int) Command {
 	type options struct {
+		LanguageOptions *struct {
+			LocalizationCode string `option:"language"`
+		} `option:"language"`
 		GenerationOptions *struct {
 			ID int `option:"generation_number"`
 		} `option:"generation"`
@@ -126,13 +129,12 @@ func Set(minGen int, maxGen int) Command {
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
 			Name:        "set",
-			Description: "Set a server-wide configuration value for the Pokedex",
+			Description: "Set a server-wide configuration value for the Pokedex.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "generation",
 					Description: "Set Pokemon generation",
-					Required:    false,
 					Options: []*discordgo.ApplicationCommandOption{
 						{
 							Type:        discordgo.ApplicationCommandOptionInteger,
@@ -144,10 +146,44 @@ func Set(minGen int, maxGen int) Command {
 						},
 					},
 				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "language",
+					Description: "Set language for data",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "language",
+							Description: "Language to use",
+							Required:    true,
+							Choices: []*discordgo.ApplicationCommandOptionChoice{
+								{
+									Name:  "english",
+									Value: "en",
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 		handler: func(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate, opt options) error {
-			if opt.GenerationOptions != nil {
+			if opt.LanguageOptions != nil {
+				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(opt.LanguageOptions.LocalizationCode))
+				if err != nil {
+					return fmt.Errorf("error while changing language: %w", err)
+				}
+
+				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "Language successfully changed.",
+					},
+				})
+				if err != nil {
+					return fmt.Errorf("error while responding to command: %w", err)
+				}
+			} else if opt.GenerationOptions != nil {
 				err := mdl.SetGenerationByID(ctx, opt.GenerationOptions.ID)
 				if err != nil {
 					return fmt.Errorf("error while changing generation: %w", err)
