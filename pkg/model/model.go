@@ -139,6 +139,25 @@ func (m *Model) PokemonById(ctx context.Context, id int) (*Pokemon, error) {
 	return &pokemon, nil
 }
 
+func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error) {
+	pokemon := Pokemon{model: m}
+	err := m.db.QueryRowxContext(ctx, `
+		SELECT id, name, pokemon_species_id
+		FROM pokemon_v2_pokemon
+		WHERE name = ?
+	`, name).StructScan(&pokemon)
+	if err != nil {
+		return nil, fmt.Errorf("no matching pokemon found: %w", err)
+	}
+
+	err = m.checkPokemonGeneration(ctx, &pokemon)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pokemon for generation: %w", err)
+	}
+
+	return &pokemon, nil
+}
+
 func (m *Model) LocalizedPokemonName(ctx context.Context, pokemon *Pokemon) (string, error) {
 	if m.language == nil {
 		return "", ErrUnsetLanguage
