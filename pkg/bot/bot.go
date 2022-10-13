@@ -13,18 +13,20 @@ import (
 )
 
 type Bot struct {
-	Config   config.Config
-	Session  *discordgo.Session
-	Commands []command.Command
-	Models   map[string]*model.Model
+	Config      config.Config
+	Session     *discordgo.Session
+	Commands    []command.Command
+	GuildModels map[string]*model.Model
 }
 
-func New(config config.Config) *Bot {
+func New(config config.Config) (*Bot, error) {
 	return &Bot{
-		Config:   config,
-		Commands: []command.Command{},
-		Models:   make(map[string]*model.Model),
-	}
+		Config: config,
+		Commands: []command.Command{
+			command.Set(1, 8),
+		},
+		GuildModels: make(map[string]*model.Model),
+	}, nil
 }
 
 func (bot *Bot) Close() error {
@@ -37,7 +39,7 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 	if err != nil {
 		return fmt.Errorf("error while instantiating model for guild %q: %w", guild.Name, err)
 	}
-	bot.Models[guild.ID] = mdl
+	bot.GuildModels[guild.ID] = mdl
 
 	err = mdl.SetLanguageByLocale(ctx, discordgo.Locale(guild.PreferredLocale))
 	if err != nil {
@@ -54,13 +56,13 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 }
 
 func (bot *Bot) removeGuild(guild *discordgo.Guild) {
-	delete(bot.Models, guild.ID)
+	delete(bot.GuildModels, guild.ID)
 }
 
 var ErrNoMatchingModel = errors.New("no matching model")
 
 func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
-	model, ok := bot.Models[guild.ID]
+	model, ok := bot.GuildModels[guild.ID]
 	if !ok {
 		return nil, fmt.Errorf("could not find model for guild %q: %w", guild.Name, ErrNoMatchingModel)
 	}
@@ -93,7 +95,7 @@ func (bot *Bot) initialize(ctx context.Context) error {
 		}
 	})
 
-	err = bot.RegisterCommands(ctx)
+	err = bot.registerCommands(ctx)
 	if err != nil {
 		return fmt.Errorf("error while registering commands: %w", err)
 	}
@@ -107,7 +109,7 @@ func (bot *Bot) Run(ctx context.Context) error {
 		return fmt.Errorf("error while initializing bot: %w", err)
 	}
 
-	log.Println("Hosting pokedex bot.")
+	log.Println("Hosting Pokedex bot.")
 	defer bot.Close()
 	<-ctx.Done()
 
@@ -145,7 +147,7 @@ func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 	return nil
 }
 
-func (bot *Bot) RegisterCommands(ctx context.Context) error {
+func (bot *Bot) registerCommands(ctx context.Context) error {
 	for _, cmd := range bot.Commands {
 		err := bot.register(ctx, cmd)
 		if err != nil {

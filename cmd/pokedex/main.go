@@ -25,7 +25,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bot := bot.New(cfg)
+	bot, err := bot.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	err = bot.Run(ctx)
 	if err != nil {
 		log.Fatal(err)

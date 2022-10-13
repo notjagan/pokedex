@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -11,13 +12,13 @@ import (
 
 type Command interface {
 	ApplicationCommand() *discordgo.ApplicationCommand
-	CallHandler(*model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
+	CallHandler(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
 	Name() string
 }
 
 type command[S any] struct {
 	applicationCommand *discordgo.ApplicationCommand
-	handler            func(*model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) error
+	handler            func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) error
 }
 
 func (cmd command[S]) ApplicationCommand() *discordgo.ApplicationCommand {
@@ -28,13 +29,17 @@ func (cmd command[S]) Name() string {
 	return cmd.applicationCommand.Name
 }
 
-func (cmd command[S]) CallHandler(mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+func (cmd command[S]) CallHandler(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate) error {
 	var structure S
 	err := decodeOptions(interaction.ApplicationCommandData().Options, &structure)
 	if err != nil {
 		return fmt.Errorf("error while decoding options for command: %w", err)
 	}
-	cmd.handler(mdl, sess, interaction, structure)
+
+	err = cmd.handler(ctx, mdl, sess, interaction, structure)
+	if err != nil {
+		return fmt.Errorf("error while calling handler: %w", err)
+	}
 
 	return nil
 }
@@ -64,33 +69,104 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 		m[fieldt.Tag.Get("option")] = field
 	}
 
-	for _, S := range options {
-		field, ok := m[S.Name]
+	for _, option := range options {
+		field, ok := m[option.Name]
 		if !ok {
-			return fmt.Errorf("unexpected option name %q: %w", S.Name, ErrDecodeOption)
+			return fmt.Errorf("unexpected option name %q: %w", option.Name, ErrDecodeOption)
 		}
 
-		switch S.Type {
+		switch option.Type {
 		case discordgo.ApplicationCommandOptionString:
 			if field.Kind() == reflect.String {
-				field.SetString(S.StringValue())
+				field.SetString(option.StringValue())
 				continue
 			}
 		case discordgo.ApplicationCommandOptionInteger:
 			if field.Kind() == reflect.Int {
-				field.SetInt(S.IntValue())
+				field.SetInt(option.IntValue())
 				continue
 			}
 		case discordgo.ApplicationCommandOptionBoolean:
 			if field.Kind() == reflect.Bool {
-				field.SetBool(S.BoolValue())
+				field.SetBool(option.BoolValue())
+				continue
+			}
+		case discordgo.ApplicationCommandOptionSubCommand:
+			if field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Struct {
+				ptr := reflect.New(field.Type().Elem())
+				field.Set(ptr)
+
+				err := decodeOptions(option.Options, ptr.Interface())
+				if err != nil {
+					return fmt.Errorf("error while decoding options for subcommand %q: %w", option.Name, err)
+				}
+
 				continue
 			}
 		default:
-			return fmt.Errorf("unsupported type %q for option %q: %w", S.Type, S.Name, ErrDecodeOption)
+			return fmt.Errorf("unsupported type %q for option %q: %w", option.Type, option.Name, ErrDecodeOption)
 		}
-		return fmt.Errorf("unexpected type %q for option %q: %w", S.Type, S.Name, ErrDecodeOption)
+		return fmt.Errorf("unexpected type %q for option %q: %w", option.Type, option.Name, ErrDecodeOption)
 	}
 
 	return nil
+}
+
+var ErrCommandFormat = errors.New("invalid command format")
+
+func Set(minGen int, maxGen int) Command {
+	type options struct {
+		GenerationOptions *struct {
+			ID int `option:"generation_number"`
+		} `option:"generation"`
+	}
+
+	minGenFloat := float64(minGen)
+
+	return command[options]{
+		applicationCommand: &discordgo.ApplicationCommand{
+			Name:        "set",
+			Description: "Set a server-wide configuration value for the Pokedex",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "generation",
+					Description: "Set Pokemon generation",
+					Required:    false,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionInteger,
+							Name:        "generation_number",
+							Description: "Game generation to pull data from",
+							Required:    true,
+							MinValue:    &minGenFloat,
+							MaxValue:    float64(maxGen),
+						},
+					},
+				},
+			},
+		},
+		handler: func(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate, opt options) error {
+			if opt.GenerationOptions != nil {
+				err := mdl.SetGenerationByID(ctx, opt.GenerationOptions.ID)
+				if err != nil {
+					return fmt.Errorf("error while changing generation: %w", err)
+				}
+
+				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "Generation successfully changed.",
+					},
+				})
+				if err != nil {
+					return fmt.Errorf("error while responding to command: %w", err)
+				}
+			} else {
+				return fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
+			}
+
+			return nil
+		},
+	}
 }
