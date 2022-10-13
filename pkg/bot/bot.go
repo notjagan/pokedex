@@ -13,10 +13,10 @@ import (
 )
 
 type Bot struct {
-	Config      config.Config
-	Session     *discordgo.Session
-	Commands    []command.Command
-	GuildModels map[string]*model.Model
+	Config   config.Config
+	Session  *discordgo.Session
+	Commands []command.Command
+	Models   map[string]*model.Model
 }
 
 func New(config config.Config) (*Bot, error) {
@@ -25,7 +25,7 @@ func New(config config.Config) (*Bot, error) {
 		Commands: []command.Command{
 			command.Set(1, 8),
 		},
-		GuildModels: make(map[string]*model.Model),
+		Models: make(map[string]*model.Model),
 	}, nil
 }
 
@@ -39,7 +39,7 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 	if err != nil {
 		return fmt.Errorf("error while instantiating model for guild %q: %w", guild.Name, err)
 	}
-	bot.GuildModels[guild.ID] = mdl
+	bot.Models[guild.ID] = mdl
 
 	err = mdl.SetLanguageByLocale(ctx, discordgo.Locale(guild.PreferredLocale))
 	if err != nil {
@@ -56,13 +56,13 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 }
 
 func (bot *Bot) removeGuild(guild *discordgo.Guild) {
-	delete(bot.GuildModels, guild.ID)
+	delete(bot.Models, guild.ID)
 }
 
 var ErrNoMatchingModel = errors.New("no matching model")
 
 func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
-	model, ok := bot.GuildModels[guild.ID]
+	model, ok := bot.Models[guild.ID]
 	if !ok {
 		return nil, fmt.Errorf("could not find model for guild %q: %w", guild.Name, ErrNoMatchingModel)
 	}

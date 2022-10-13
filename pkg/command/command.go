@@ -16,21 +16,21 @@ type Command interface {
 	Name() string
 }
 
-type command[S any] struct {
+type command[T any] struct {
 	applicationCommand *discordgo.ApplicationCommand
-	handler            func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) error
+	handler            func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, T) error
 }
 
-func (cmd command[S]) ApplicationCommand() *discordgo.ApplicationCommand {
+func (cmd command[T]) ApplicationCommand() *discordgo.ApplicationCommand {
 	return cmd.applicationCommand
 }
 
-func (cmd command[S]) Name() string {
+func (cmd command[T]) Name() string {
 	return cmd.applicationCommand.Name
 }
 
-func (cmd command[S]) CallHandler(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate) error {
-	var structure S
+func (cmd command[T]) CallHandler(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+	var structure T
 	err := decodeOptions(interaction.ApplicationCommandData().Options, &structure)
 	if err != nil {
 		return fmt.Errorf("error while decoding options for command: %w", err)
