@@ -39,11 +39,16 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 	}
 	bot.Models[guild.ID] = mdl
 
-	code, err := model.LocaleToLocalizationCode(discordgo.Locale(guild.PreferredLocale))
+	err = mdl.SetLanguageByLocale(ctx, discordgo.Locale(guild.PreferredLocale))
 	if err != nil {
-		return fmt.Errorf("error while decoding preferred locale: %w", err)
+		return fmt.Errorf("error while setting language: %w", err)
 	}
-	mdl.SetLanguage(ctx, code)
+
+	gen, err := mdl.LatestGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("error while getting default generation: %w", err)
+	}
+	mdl.SetGeneration(ctx, gen)
 
 	return nil
 }
@@ -75,16 +80,8 @@ func (bot *Bot) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to start discord session: %w", err)
 	}
 
-	bot.Session.AddHandler(func(_ *discordgo.Session, ready *discordgo.Ready) {
-		for _, guild := range ready.Guilds {
-			err := bot.addGuild(ctx, guild)
-			if err != nil {
-				log.Printf("failed to add guild %q: %v", guild.Name, err)
-			}
-		}
-	})
 	bot.Session.AddHandler(func(_ *discordgo.Session, create *discordgo.GuildCreate) {
-		bot.addGuild(ctx, create.Guild)
+		err := bot.addGuild(ctx, create.Guild)
 		if err != nil {
 			log.Printf("failed to add guild %q: %v", create.Guild.Name, err)
 		}
@@ -96,7 +93,7 @@ func (bot *Bot) initialize(ctx context.Context) error {
 		}
 	})
 
-	err = bot.RegisterCommands()
+	err = bot.RegisterCommands(ctx)
 	if err != nil {
 		return fmt.Errorf("error while registering commands: %w", err)
 	}
@@ -117,7 +114,7 @@ func (bot *Bot) Run(ctx context.Context) error {
 	return nil
 }
 
-func (bot *Bot) register(cmd command.Command) error {
+func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 	_, err := bot.Session.ApplicationCommandCreate(bot.Session.State.User.ID, "", cmd.ApplicationCommand())
 	if err != nil {
 		return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
@@ -137,16 +134,20 @@ func (bot *Bot) register(cmd command.Command) error {
 			}
 
 			log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
-			cmd.CallHandler(mdl, sess, interaction)
+			err = cmd.CallHandler(ctx, mdl, sess, interaction)
+			if err != nil {
+				log.Printf("error while executing command %q: %v", cmd.Name(), err)
+				return
+			}
 		}
 	})
 
 	return nil
 }
 
-func (bot *Bot) RegisterCommands() error {
+func (bot *Bot) RegisterCommands(ctx context.Context) error {
 	for _, cmd := range bot.Commands {
-		err := bot.register(cmd)
+		err := bot.register(ctx, cmd)
 		if err != nil {
 			return fmt.Errorf("failed to register command %q: %w", cmd.Name(), err)
 		}

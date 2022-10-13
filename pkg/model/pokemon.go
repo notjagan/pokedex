@@ -7,7 +7,7 @@ type Pokemon struct {
 
 	ID        int    `db:"id"`
 	Name      string `db:"name"`
-	SpeciesId int    `db:"pokemon_species_id"`
+	SpeciesID int    `db:"pokemon_species_id"`
 }
 
 func (p *Pokemon) LocalizedName(ctx context.Context) (string, error) {
