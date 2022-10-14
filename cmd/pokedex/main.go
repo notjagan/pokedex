@@ -21,7 +21,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bot, err := bot.New(*cfg)
+	bot, err := bot.New(ctx, *cfg)
 	if err != nil {
 		log.Fatal(err)
 	}

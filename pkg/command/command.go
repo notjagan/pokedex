@@ -46,7 +46,16 @@ func (cmd command[T]) CallHandler(ctx context.Context, mdl *model.Model, sess *d
 
 var ErrDecodeOption = errors.New("error while decoding options")
 
-func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption, pointer any) error {
+func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption, pointer any) (ret error) {
+	defer func() {
+		r := recover()
+		if err, ok := r.(reflect.ValueError); ok {
+			ret = fmt.Errorf("reflection error while decoding options: %v", err.Error())
+		} else if r != nil {
+			panic(r)
+		}
+	}()
+
 	t := reflect.TypeOf(pointer)
 	if t.Kind() != reflect.Pointer {
 		return fmt.Errorf("cannot populate values for non-pointer: %w", ErrDecodeOption)
@@ -110,99 +119,4 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 	}
 
 	return nil
-}
-
-var ErrCommandFormat = errors.New("invalid command format")
-
-func Set(minGen int, maxGen int) Command {
-	type options struct {
-		LanguageOptions *struct {
-			LocalizationCode string `option:"language"`
-		} `option:"language"`
-		GenerationOptions *struct {
-			ID int `option:"generation_number"`
-		} `option:"generation"`
-	}
-
-	minGenFloat := float64(minGen)
-
-	return command[options]{
-		applicationCommand: &discordgo.ApplicationCommand{
-			Name:        "set",
-			Description: "Set a server-wide configuration value for the Pokedex.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "generation",
-					Description: "Set Pokemon generation",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionInteger,
-							Name:        "generation_number",
-							Description: "Game generation to pull data from",
-							Required:    true,
-							MinValue:    &minGenFloat,
-							MaxValue:    float64(maxGen),
-						},
-					},
-				},
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "language",
-					Description: "Set language for data",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "language",
-							Description: "Language to use",
-							Required:    true,
-							Choices: []*discordgo.ApplicationCommandOptionChoice{
-								{
-									Name:  "english",
-									Value: "en",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		handler: func(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate, opt options) error {
-			if opt.LanguageOptions != nil {
-				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(opt.LanguageOptions.LocalizationCode))
-				if err != nil {
-					return fmt.Errorf("error while changing language: %w", err)
-				}
-
-				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Language successfully changed.",
-					},
-				})
-				if err != nil {
-					return fmt.Errorf("error while responding to command: %w", err)
-				}
-			} else if opt.GenerationOptions != nil {
-				err := mdl.SetGenerationByID(ctx, opt.GenerationOptions.ID)
-				if err != nil {
-					return fmt.Errorf("error while changing generation: %w", err)
-				}
-
-				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Generation successfully changed.",
-					},
-				})
-				if err != nil {
-					return fmt.Errorf("error while responding to command: %w", err)
-				}
-			} else {
-				return fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
-			}
-
-			return nil
-		},
-	}
 }

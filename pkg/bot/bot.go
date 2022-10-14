@@ -13,19 +13,22 @@ import (
 )
 
 type Bot struct {
-	Config   config.Config
-	Session  *discordgo.Session
-	Commands []command.Command
-	Models   map[string]*model.Model
+	Config         config.Config
+	Session        *discordgo.Session
+	CommandBuilder *command.Builder
+	Models         map[string]*model.Model
 }
 
-func New(config config.Config) (*Bot, error) {
+func New(ctx context.Context, config config.Config) (*Bot, error) {
+	mdl, err := model.New(ctx, config.DB.Path)
+	if err != nil {
+		return nil, fmt.Errorf("error while creating model for command builder: %w", err)
+	}
+
 	return &Bot{
-		Config: config,
-		Commands: []command.Command{
-			command.Set(1, 8),
-		},
-		Models: make(map[string]*model.Model),
+		Config:         config,
+		CommandBuilder: &command.Builder{Model: mdl},
+		Models:         make(map[string]*model.Model),
 	}, nil
 }
 
@@ -148,7 +151,12 @@ func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 }
 
 func (bot *Bot) registerCommands(ctx context.Context) error {
-	for _, cmd := range bot.Commands {
+	cmds, err := bot.CommandBuilder.All(ctx)
+	if err != nil {
+		return fmt.Errorf("error while getting all commands for bot: %w", err)
+	}
+
+	for _, cmd := range cmds {
 		err := bot.register(ctx, cmd)
 		if err != nil {
 			return fmt.Errorf("failed to register command %q: %w", cmd.Name(), err)
