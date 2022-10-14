@@ -13,36 +13,50 @@ import (
 )
 
 type Bot struct {
-	Config         config.Config
-	Session        *discordgo.Session
-	CommandBuilder *command.Builder
-	Models         map[string]*model.Model
+	config   config.Config
+	session  *discordgo.Session
+	commands []command.Command
+	models   map[string]*model.Model
 }
 
 func New(ctx context.Context, config config.Config) (*Bot, error) {
-	mdl, err := model.New(ctx, config.DB.Path)
+	cmds, err := command.All(ctx, config.DB.Path)
 	if err != nil {
-		return nil, fmt.Errorf("error while creating model for command builder: %w", err)
+		return nil, fmt.Errorf("error while getting all commands for bot: %w", err)
 	}
 
 	return &Bot{
-		Config:         config,
-		CommandBuilder: &command.Builder{Model: mdl},
-		Models:         make(map[string]*model.Model),
+		config:   config,
+		commands: cmds,
+		models:   make(map[string]*model.Model),
 	}, nil
 }
 
-func (bot *Bot) Close() error {
+func (bot *Bot) Close() <-chan error {
+	out := make(chan error)
+	defer close(out)
+
 	log.Println("Shutting down.")
-	return bot.Session.Close()
+	for _, model := range bot.models {
+		err := model.Close()
+		if err != nil {
+			out <- fmt.Errorf("error while closing model: %w", err)
+		}
+	}
+	err := bot.session.Close()
+	if err != nil {
+		out <- fmt.Errorf("error while closing discord session: %w", err)
+	}
+
+	return out
 }
 
 func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
-	mdl, err := model.New(ctx, bot.Config.DB.Path)
+	mdl, err := model.New(ctx, bot.config.DB.Path)
 	if err != nil {
 		return fmt.Errorf("error while instantiating model for guild %q: %w", guild.Name, err)
 	}
-	bot.Models[guild.ID] = mdl
+	bot.models[guild.ID] = mdl
 
 	err = mdl.SetLanguageByLocale(ctx, discordgo.Locale(guild.PreferredLocale))
 	if err != nil {
@@ -59,13 +73,13 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 }
 
 func (bot *Bot) removeGuild(guild *discordgo.Guild) {
-	delete(bot.Models, guild.ID)
+	delete(bot.models, guild.ID)
 }
 
 var ErrNoMatchingModel = errors.New("no matching model")
 
 func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
-	model, ok := bot.Models[guild.ID]
+	model, ok := bot.models[guild.ID]
 	if !ok {
 		return nil, fmt.Errorf("could not find model for guild %q: %w", guild.Name, ErrNoMatchingModel)
 	}
@@ -74,24 +88,24 @@ func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
 }
 
 func (bot *Bot) initialize(ctx context.Context) error {
-	sess, err := discordgo.New("Bot " + bot.Config.Discord.Token)
+	sess, err := discordgo.New("Bot " + bot.config.Discord.Token)
 	if err != nil {
 		return fmt.Errorf("failed to instantiate discord bot: %w", err)
 	}
-	bot.Session = sess
+	bot.session = sess
 
-	err = bot.Session.Open()
+	err = bot.session.Open()
 	if err != nil {
 		return fmt.Errorf("failed to start discord session: %w", err)
 	}
 
-	bot.Session.AddHandler(func(_ *discordgo.Session, create *discordgo.GuildCreate) {
+	bot.session.AddHandler(func(_ *discordgo.Session, create *discordgo.GuildCreate) {
 		err := bot.addGuild(ctx, create.Guild)
 		if err != nil {
 			log.Printf("failed to add guild %q: %v", create.Guild.Name, err)
 		}
 	})
-	bot.Session.AddHandler(func(_ *discordgo.Session, delete *discordgo.GuildDelete) {
+	bot.session.AddHandler(func(_ *discordgo.Session, delete *discordgo.GuildDelete) {
 		bot.removeGuild(delete.Guild)
 		if err != nil {
 			log.Printf("failed to add guild %q: %v", delete.Guild.Name, err)
@@ -120,11 +134,11 @@ func (bot *Bot) Run(ctx context.Context) error {
 }
 
 func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
-	_, err := bot.Session.ApplicationCommandCreate(bot.Session.State.User.ID, "", cmd.ApplicationCommand())
+	_, err := bot.session.ApplicationCommandCreate(bot.session.State.User.ID, "", cmd.ApplicationCommand())
 	if err != nil {
 		return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
 	}
-	bot.Session.AddHandler(func(sess *discordgo.Session, interaction *discordgo.InteractionCreate) {
+	bot.session.AddHandler(func(sess *discordgo.Session, interaction *discordgo.InteractionCreate) {
 		if interaction.ApplicationCommandData().Name == cmd.Name() {
 			guild, err := sess.State.Guild(interaction.GuildID)
 			if err != nil {
@@ -151,12 +165,7 @@ func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 }
 
 func (bot *Bot) registerCommands(ctx context.Context) error {
-	cmds, err := bot.CommandBuilder.All(ctx)
-	if err != nil {
-		return fmt.Errorf("error while getting all commands for bot: %w", err)
-	}
-
-	for _, cmd := range cmds {
+	for _, cmd := range bot.commands {
 		err := bot.register(ctx, cmd)
 		if err != nil {
 			return fmt.Errorf("failed to register command %q: %w", cmd.Name(), err)

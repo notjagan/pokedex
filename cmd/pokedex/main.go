@@ -27,6 +27,15 @@ func main() {
 	}
 
 	err = bot.Run(ctx)
+	defer func() {
+		var err error = nil
+		for err = range bot.Close() {
+			log.Printf("error while shutting down bot: %v", err)
+		}
+		if err != nil {
+			os.Exit(1)
+		}
+	}()
 	if err != nil {
 		log.Fatal(err)
 	}

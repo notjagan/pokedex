@@ -17,13 +17,22 @@ type Builder struct {
 	funcs []commandFunc
 }
 
-func New(mdl *model.Model) *Builder {
+func NewBuilder(mdl *model.Model) *Builder {
 	return &Builder{
 		Model: mdl,
 		funcs: []commandFunc{
 			Set,
 		},
 	}
+}
+
+func (builder *Builder) Close(ctx context.Context) error {
+	err := builder.Model.Close()
+	if err != nil {
+		return fmt.Errorf("error while closing model for command builder: %w", err)
+	}
+
+	return nil
 }
 
 var ErrCommandFormat = errors.New("invalid command format")
@@ -138,4 +147,15 @@ func (builder *Builder) All(ctx context.Context) ([]Command, error) {
 	}
 
 	return commands, nil
+}
+
+func All(ctx context.Context, dbPath string) ([]Command, error) {
+	mdl, err := model.New(ctx, dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("error while creating model for command builder: %w", err)
+	}
+
+	builder := NewBuilder(mdl)
+	defer builder.Close(ctx)
+	return builder.All(ctx)
 }

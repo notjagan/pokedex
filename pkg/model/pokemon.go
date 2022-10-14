@@ -11,5 +11,5 @@ type Pokemon struct {
 }
 
 func (p *Pokemon) LocalizedName(ctx context.Context) (string, error) {
-	return p.model.LocalizedPokemonName(ctx, p)
+	return p.model.localizedPokemonName(ctx, p)
 }
