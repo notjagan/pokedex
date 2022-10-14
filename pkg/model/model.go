@@ -36,7 +36,7 @@ func (m *Model) Close() error {
 
 var ErrUnsetLanguage = errors.New("model language is nil")
 
-func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code LocalizationCode) error {
+func (m *Model) GetLanguage(ctx context.Context, code LocalizationCode) (*Language, error) {
 	lang := Language{model: m}
 	err := m.db.QueryRowxContext(ctx, `
 		SELECT id, iso639
@@ -44,10 +44,17 @@ func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code Localiza
 		WHERE iso639 = ?
 	`, code).StructScan(&lang)
 	if err != nil {
-		return fmt.Errorf("locale %q not found: %w", code, err)
+		return nil, fmt.Errorf("localization code %q not found: %w", code, err)
 	}
+	return &lang, nil
+}
 
-	m.language = &lang
+func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code LocalizationCode) error {
+	lang, err := m.GetLanguage(ctx, code)
+	if err != nil {
+		return fmt.Errorf("error while getting language: %w", err)
+	}
+	m.language = lang
 
 	return nil
 }
@@ -191,11 +198,43 @@ func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (str
 	`, pokemon.SpeciesID, m.language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf(
-			"could not find name for pokemon %q in locale %q: %w",
+			"could not find name for pokemon %q for language with code %q: %w",
 			pokemon.Name,
 			m.language.ISO639,
 			err,
 		)
+	}
+
+	return name, nil
+}
+
+func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
+	langs := make([]*Language, len(AllLocalizationCodes))
+
+	for i, code := range AllLocalizationCodes {
+		lang, err := m.GetLanguage(ctx, code)
+		if err != nil {
+			return nil, fmt.Errorf("error while getting all languages: %w", err)
+		}
+		langs[i] = lang
+	}
+
+	return langs, nil
+}
+
+func (m *Model) getLocalizedLanguageName(ctx context.Context, lang *Language) (string, error) {
+	if m.language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx, `
+		SELECT name
+		FROM pokemon_v2_languagename
+		WHERE language_id = ? AND local_language_id = ?
+	`, lang.ID, m.language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("error while getting localized name for language with code %q: %w", lang.ISO639, err)
 	}
 
 	return name, nil

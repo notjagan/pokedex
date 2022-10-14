@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -13,6 +14,10 @@ const (
 	LocalizationCodeEnglish LocalizationCode = "en"
 	UnknownLocalizationCode LocalizationCode = ""
 )
+
+var AllLocalizationCodes = []LocalizationCode{
+	LocalizationCodeEnglish,
+}
 
 type Language struct {
 	model *Model
@@ -30,4 +35,8 @@ func LocaleToLocalizationCode(locale discordgo.Locale) (LocalizationCode, error)
 	default:
 		return UnknownLocalizationCode, fmt.Errorf("unrecognized locale %q: %w", locale, ErrUnrecognizedLocale)
 	}
+}
+
+func (lang *Language) LocalizedName(ctx context.Context) (string, error) {
+	return lang.model.getLocalizedLanguageName(ctx, lang)
 }

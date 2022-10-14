@@ -17,7 +17,8 @@ type Builder struct {
 	funcs []commandFunc
 }
 
-func NewBuilder(mdl *model.Model) *Builder {
+func NewBuilder(ctx context.Context, mdl *model.Model) *Builder {
+	mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCodeEnglish)
 	return &Builder{
 		Model: mdl,
 		funcs: []commandFunc{
@@ -52,11 +53,29 @@ func Set(builder *Builder, ctx context.Context) (Command, error) {
 		return command[options]{}, fmt.Errorf("error while getting min gen for set command: %w", err)
 	}
 	minGen := float64(gen.ID)
+
 	gen, err = builder.Model.LatestGeneration(ctx)
 	if err != nil {
 		return command[options]{}, fmt.Errorf("error while getting max gen for set command: %w", err)
 	}
 	maxGen := float64(gen.ID)
+
+	langs, err := builder.Model.AllLanguages(ctx)
+	if err != nil {
+		return command[options]{}, fmt.Errorf("error while getting available language options: %w", err)
+	}
+
+	langChoices := make([]*discordgo.ApplicationCommandOptionChoice, len(langs))
+	for i, lang := range langs {
+		name, err := lang.LocalizedName(ctx)
+		if err != nil {
+			return command[options]{}, fmt.Errorf("error while localizing language options: %w", err)
+		}
+		langChoices[i] = &discordgo.ApplicationCommandOptionChoice{
+			Name:  name,
+			Value: lang.ISO639,
+		}
+	}
 
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
@@ -88,12 +107,7 @@ func Set(builder *Builder, ctx context.Context) (Command, error) {
 							Name:        "language",
 							Description: "Language to use",
 							Required:    true,
-							Choices: []*discordgo.ApplicationCommandOptionChoice{
-								{
-									Name:  "english",
-									Value: "en",
-								},
-							},
+							Choices:     langChoices,
 						},
 					},
 				},
@@ -159,7 +173,7 @@ func All(ctx context.Context, dbPath string) ([]Command, error) {
 		return nil, fmt.Errorf("error while creating model for command builder: %w", err)
 	}
 
-	builder := NewBuilder(mdl)
+	builder := NewBuilder(ctx, mdl)
 	defer builder.Close(ctx)
 	return builder.All(ctx)
 }
