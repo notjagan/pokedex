@@ -83,6 +83,19 @@ func (m *Model) SetGeneration(ctx context.Context, gen *Generation) {
 	m.generation = gen
 }
 
+func (m *Model) EarliestGeneration(ctx context.Context) (*Generation, error) {
+	gen := Generation{model: m}
+	err := m.db.QueryRowxContext(ctx, `
+		SELECT MIN(id) AS id
+		FROM pokemon_v2_generation
+	`).StructScan(&gen)
+	if err != nil {
+		return nil, fmt.Errorf("could not find latest generation")
+	}
+
+	return &gen, nil
+}
+
 func (m *Model) LatestGeneration(ctx context.Context) (*Generation, error) {
 	gen := Generation{model: m}
 	err := m.db.QueryRowxContext(ctx, `
@@ -98,23 +111,30 @@ func (m *Model) LatestGeneration(ctx context.Context) (*Generation, error) {
 
 var ErrWrongGeneration = errors.New("selected resource does not exist in the current generation")
 
-func (m *Model) checkPokemonGeneration(ctx context.Context, pokemon *Pokemon) error {
-	if m.generation == nil {
-		return ErrUnsetGeneration
-	}
-
-	gen := Generation{model: m}
+func (m *Model) generationHasPokemon(ctx context.Context, gen *Generation, pokemon *Pokemon) (bool, error) {
+	g := Generation{model: m}
 	err := m.db.QueryRowxContext(ctx, `
 		SELECT generation_id AS id
 		FROM pokemon_v2_pokemonspecies
 		WHERE id = ?
-	`, pokemon.SpeciesID).StructScan(&gen)
+	`, pokemon.SpeciesID).StructScan(&g)
 	if err != nil {
-		return fmt.Errorf("could not find generation for pokemon: %w", err)
+		return false, fmt.Errorf("could not find generation for pokemon: %w", err)
 	}
 
-	if m.generation.ID < gen.ID {
-		return fmt.Errorf("pokemon does not exist in the current generation: %w", ErrWrongGeneration)
+	return gen.ID >= g.ID, nil
+}
+
+func (m *Model) validatePokemonGeneration(ctx context.Context, pokemon *Pokemon) error {
+	if m.generation == nil {
+		return fmt.Errorf("failed to check if generation has pokemon: %w", ErrUnsetGeneration)
+	}
+
+	ok, err := m.generation.HasPokemon(ctx, pokemon)
+	if err != nil {
+		return fmt.Errorf("failed to check if generation has pokemon: %w", err)
+	} else if !ok {
+		return ErrWrongGeneration
 	}
 
 	return nil
@@ -131,7 +151,7 @@ func (m *Model) PokemonById(ctx context.Context, id int) (*Pokemon, error) {
 		return nil, fmt.Errorf("no matching pokemon found: %w", err)
 	}
 
-	err = m.checkPokemonGeneration(ctx, &pokemon)
+	err = m.validatePokemonGeneration(ctx, &pokemon)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pokemon for generation: %w", err)
 	}
@@ -150,7 +170,7 @@ func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error
 		return nil, fmt.Errorf("no matching pokemon found: %w", err)
 	}
 
-	err = m.checkPokemonGeneration(ctx, &pokemon)
+	err = m.validatePokemonGeneration(ctx, &pokemon)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pokemon for generation: %w", err)
 	}
@@ -158,7 +178,7 @@ func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error
 	return &pokemon, nil
 }
 
-func (m *Model) LocalizedPokemonName(ctx context.Context, pokemon *Pokemon) (string, error) {
+func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (string, error) {
 	if m.language == nil {
 		return "", ErrUnsetLanguage
 	}
