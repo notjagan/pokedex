@@ -32,23 +32,18 @@ func New(ctx context.Context, config config.Config) (*Bot, error) {
 	}, nil
 }
 
-func (bot *Bot) Close() <-chan error {
-	out := make(chan error)
-	defer close(out)
-
+func (bot *Bot) Close() {
 	log.Println("Shutting down.")
 	for _, model := range bot.models {
 		err := model.Close()
 		if err != nil {
-			out <- fmt.Errorf("error while closing model: %w", err)
+			log.Printf("error while closing model: %v", err)
 		}
 	}
 	err := bot.session.Close()
 	if err != nil {
-		out <- fmt.Errorf("error while closing discord session: %w", err)
+		log.Printf("error while closing discord session: %v", err)
 	}
-
-	return out
 }
 
 func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
