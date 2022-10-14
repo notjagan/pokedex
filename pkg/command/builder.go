@@ -47,8 +47,12 @@ func Set(builder *Builder, ctx context.Context) (Command, error) {
 		} `option:"generation"`
 	}
 
-	minGen := float64(1)
-	gen, err := builder.Model.LatestGeneration(ctx)
+	gen, err := builder.Model.EarliestGeneration(ctx)
+	if err != nil {
+		return command[options]{}, fmt.Errorf("error while getting min gen for set command: %w", err)
+	}
+	minGen := float64(gen.ID)
+	gen, err = builder.Model.LatestGeneration(ctx)
 	if err != nil {
 		return command[options]{}, fmt.Errorf("error while getting max gen for set command: %w", err)
 	}
