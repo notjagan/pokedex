@@ -261,6 +261,28 @@ func pokemonChoices(ctx context.Context, m *model.Model, prefix string) ([]*disc
 	return choices, nil
 }
 
+func (builder *Builder) checkEmojis(sess *discordgo.Session) error {
+	if builder.emojis == nil {
+		var guild *discordgo.Guild
+		for _, g := range sess.State.Guilds {
+			if g.ID == builder.config.Discord.ResourceGuildID {
+				guild = g
+				break
+			}
+		}
+		if guild == nil {
+			return fmt.Errorf("failed to get emotes: %w", ErrMissingResourceGuild)
+		}
+
+		builder.emojis = make(map[string]*discordgo.Emoji)
+		for _, emoji := range guild.Emojis {
+			builder.emojis[emoji.Name] = emoji
+		}
+	}
+
+	return nil
+}
+
 func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	type options struct {
 		PokemonName discordField[string] `option:"pokemon"`
@@ -306,22 +328,9 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			interaction *discordgo.InteractionCreate,
 			opt *options,
 		) (*discordgo.InteractionResponse, error) {
-			if builder.emojis == nil {
-				var guild *discordgo.Guild
-				for _, g := range sess.State.Guilds {
-					if g.ID == builder.config.Discord.ResourceGuildID {
-						guild = g
-						break
-					}
-				}
-				if guild == nil {
-					return nil, fmt.Errorf("failed to get emotes: %w", ErrMissingResourceGuild)
-				}
-
-				builder.emojis = make(map[string]*discordgo.Emoji)
-				for _, emoji := range guild.Emojis {
-					builder.emojis[emoji.Name] = emoji
-				}
+			err := builder.checkEmojis(sess)
+			if err != nil {
+				return nil, err
 			}
 
 			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName.Value)
@@ -448,22 +457,9 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 			interaction *discordgo.InteractionCreate,
 			opt *options,
 		) (*discordgo.InteractionResponse, error) {
-			if builder.emojis == nil {
-				var guild *discordgo.Guild
-				for _, g := range sess.State.Guilds {
-					if g.ID == builder.config.Discord.ResourceGuildID {
-						guild = g
-						break
-					}
-				}
-				if guild == nil {
-					return nil, fmt.Errorf("failed to get emotes: %w", ErrMissingResourceGuild)
-				}
-
-				builder.emojis = make(map[string]*discordgo.Emoji)
-				for _, emoji := range guild.Emojis {
-					builder.emojis[emoji.Name] = emoji
-				}
+			err := builder.checkEmojis(sess)
+			if err != nil {
+				return nil, err
 			}
 
 			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName.Value)
