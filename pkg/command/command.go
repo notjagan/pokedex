@@ -10,15 +10,19 @@ import (
 	"github.com/notjagan/pokedex/pkg/model"
 )
 
+type handler[S any, T any] func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) (T, error)
+
 type Command interface {
 	ApplicationCommand() *discordgo.ApplicationCommand
-	CallHandler(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
+	Handler(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
+	Autocomplete(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
 	Name() string
 }
 
 type command[T any] struct {
 	applicationCommand *discordgo.ApplicationCommand
-	handler            func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, T) error
+	handler            handler[T, *discordgo.InteractionResponse]
+	autocomplete       handler[T, []*discordgo.ApplicationCommandOptionChoice]
 }
 
 func (cmd command[T]) ApplicationCommand() *discordgo.ApplicationCommand {
@@ -29,22 +33,77 @@ func (cmd command[T]) Name() string {
 	return cmd.applicationCommand.Name
 }
 
-func (cmd command[T]) CallHandler(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate) error {
+func (cmd command[T]) Handler(
+	ctx context.Context,
+	mdl *model.Model,
+	sess *discordgo.Session,
+	interaction *discordgo.InteractionCreate,
+) error {
 	var structure T
 	err := decodeOptions(interaction.ApplicationCommandData().Options, &structure)
 	if err != nil {
 		return fmt.Errorf("error while decoding options for command: %w", err)
 	}
 
-	err = cmd.handler(ctx, mdl, sess, interaction, structure)
+	resp, err := cmd.handler(ctx, mdl, sess, interaction, structure)
 	if err != nil {
 		return fmt.Errorf("error while calling handler: %w", err)
+	}
+
+	sess.InteractionRespond(interaction.Interaction, resp)
+	if err != nil {
+		return fmt.Errorf("error while responding to command: %w", err)
+	}
+
+	return nil
+}
+
+func (cmd command[T]) Autocomplete(
+	ctx context.Context,
+	mdl *model.Model,
+	sess *discordgo.Session,
+	interaction *discordgo.InteractionCreate,
+) error {
+	var structure T
+	err := decodeOptions(interaction.ApplicationCommandData().Options, &structure)
+	if err != nil {
+		return fmt.Errorf("error while decoding options for autocomplete: %w", err)
+	}
+
+	choices, err := cmd.autocomplete(ctx, mdl, sess, interaction, structure)
+	if err != nil {
+		return fmt.Errorf("error while calling autocompletion handler: %w", err)
+	}
+
+	sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{
+			Choices: choices,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("error while sending autocompletions: %w", err)
 	}
 
 	return nil
 }
 
 var ErrDecodeOption = errors.New("error while decoding options")
+
+type discordValue interface {
+	string | int | bool
+}
+
+type discordField[T discordValue] struct {
+	Value   T
+	Focused bool
+}
+
+var fieldTypes = map[reflect.Type]bool{
+	reflect.TypeOf(discordField[string]{}): true,
+	reflect.TypeOf(discordField[int]{}):    true,
+	reflect.TypeOf(discordField[bool]{}):   true,
+}
 
 func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption, pointer any) (ret error) {
 	defer func() {
@@ -71,17 +130,31 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 	m := make(map[string]reflect.Value, structure.NumField())
 	for i := 0; i < structure.NumField(); i++ {
 		field := structure.Field(i)
-		fieldt := t.Elem().Field(i)
-		if !field.CanSet() {
-			return fmt.Errorf("field %q cannot be set: %w", fieldt.Name, ErrDecodeOption)
+		tfield := t.Elem().Field(i)
+		option := tfield.Tag.Get("option")
+		if option == "" {
+			continue
 		}
-		m[fieldt.Tag.Get("option")] = field
+
+		if !field.CanSet() {
+			return fmt.Errorf("field %q cannot be set: %w", tfield.Name, ErrDecodeOption)
+		}
+		m[option] = field
 	}
 
 	for _, option := range options {
 		field, ok := m[option.Name]
 		if !ok {
 			return fmt.Errorf("unexpected option name %q: %w", option.Name, ErrDecodeOption)
+		}
+
+		if field.Kind() == reflect.Struct && fieldTypes[field.Type()] {
+			backing := field.FieldByName("Value")
+			backing.Set(reflect.Zero(backing.Type()))
+			focused := field.FieldByName("Focused")
+			focused.SetBool(option.Focused)
+
+			field = backing
 		}
 
 		switch option.Type {

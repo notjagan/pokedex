@@ -417,3 +417,32 @@ func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (s
 
 	return name, nil
 }
+
+func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]*Pokemon, error) {
+	if m.language == nil {
+		return nil, ErrUnsetLanguage
+	}
+
+	pattern := fmt.Sprintf("%s%%", prefix)
+	var ps []*Pokemon
+	err := m.db.SelectContext(ctx, &ps,
+		/* sql */ `
+		SELECT MIN(p.id) as id, p.name, p.pokemon_species_id
+		FROM pokemon_v2_pokemon p
+		JOIN pokemon_v2_pokemonspeciesname n
+			ON p.pokemon_species_id = n.pokemon_species_id
+		WHERE n.name LIKE ? AND n.language_id = ?
+		GROUP BY p.pokemon_species_id
+		ORDER BY n.name ASC
+		LIMIT ?
+	`, pattern, m.language.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting pokemon with prefix: %w", err)
+	}
+
+	for i := range ps {
+		ps[i].model = m
+	}
+
+	return ps, nil
+}

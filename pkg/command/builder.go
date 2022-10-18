@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/notjagan/pokedex/pkg/config"
@@ -138,42 +139,43 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 				},
 			},
 		},
-		handler: func(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate, opt options) error {
-			if opt.Language != nil {
+		handler: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt options,
+		) (*discordgo.InteractionResponse, error) {
+			switch {
+			case opt.Language != nil:
 				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(opt.Language.LocalizationCode))
 				if err != nil {
-					return fmt.Errorf("error while changing language: %w", err)
+					return nil, fmt.Errorf("error while changing language: %w", err)
 				}
 
-				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				return &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						Content: "Language successfully changed.",
 					},
-				})
-				if err != nil {
-					return fmt.Errorf("error while responding to command: %w", err)
-				}
-			} else if opt.Generation != nil {
+				}, nil
+
+			case opt.Generation != nil:
 				err := mdl.SetGenerationByID(ctx, opt.Generation.ID)
 				if err != nil {
-					return fmt.Errorf("error while changing generation: %w", err)
+					return nil, fmt.Errorf("error while changing generation: %w", err)
 				}
 
-				err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+				return &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						Content: "Generation successfully changed.",
 					},
-				})
-				if err != nil {
-					return fmt.Errorf("error while responding to command: %w", err)
-				}
-			} else {
-				return fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
-			}
+				}, nil
 
-			return nil
+			default:
+				return nil, fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
+			}
 		},
 	}, nil
 }
@@ -182,7 +184,7 @@ var ErrMissingResourceGuild = errors.New("resource guild not found")
 
 func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	type options struct {
-		PokemonName string `option:"pokemon"`
+		PokemonName discordField[string] `option:"pokemon"`
 	}
 
 	defaultMethods, err := builder.Model.LearnMethodsByName(ctx, []model.LearnMethodName{
@@ -195,6 +197,8 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	movesToFields := func(ctx context.Context, pms []model.PokemonMove) ([]*discordgo.MessageEmbedField, error) {
 		fields := make([]*discordgo.MessageEmbedField, len(pms))
 		for i, pm := range pms {
+			values := make([]string, 0, 5)
+
 			move, err := pm.Move(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("error while getting move data for pokemon move: %w", err)
@@ -209,9 +213,12 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			if err != nil {
 				return nil, fmt.Errorf("error while getting type for move %q: %w", move.Name, err)
 			}
-			typeString, err := builder.ToEmojiString(typ.Name)
-			if err != nil {
-				return nil, fmt.Errorf("error while constructing type emoji string for move %q: %w", move.Name, err)
+			if !typ.IsUnknown() {
+				typeString, err := builder.ToEmojiString(typ.Name)
+				if err != nil {
+					return nil, fmt.Errorf("error while constructing type emoji string for move %q: %w", move.Name, err)
+				}
+				values = append(values, typeString)
 			}
 
 			class, err := move.DamageClass(ctx)
@@ -222,24 +229,21 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			if err != nil {
 				return nil, fmt.Errorf("error while constructing type emoji string for move %q: %w", move.Name, err)
 			}
+			values = append(values, classString)
 
-			var powerString string
-			if move.Power == nil {
-				powerString = ""
-			} else {
-				powerString = fmt.Sprintf(" ▸ %d PWR", *move.Power)
+			if move.Power != nil {
+				values = append(values, fmt.Sprintf("%d POW", *move.Power))
 			}
 
-			var accuracyString string
-			if move.Accuracy == nil {
-				accuracyString = ""
-			} else {
-				accuracyString = fmt.Sprintf(" ▸ %d%%", *move.Accuracy)
+			if move.Accuracy != nil {
+				values = append(values, fmt.Sprintf("%d%%", *move.Accuracy))
 			}
+
+			values = append(values, fmt.Sprintf("%d PP", move.PP))
 
 			fields[i] = &discordgo.MessageEmbedField{
 				Name:  fmt.Sprintf("Lv. %-2d ▸ %s", pm.Level, name),
-				Value: fmt.Sprintf("%s ▸ %s%s%s ▸ %d PP", typeString, classString, powerString, accuracyString, move.PP),
+				Value: strings.Join(values, " ▸ "),
 			}
 		}
 
@@ -252,14 +256,21 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			Description: "Learnset for a given Pokemon.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "pokemon",
-					Description: "Name of the Pokemon",
-					Required:    true,
+					Type:         discordgo.ApplicationCommandOptionString,
+					Name:         "pokemon",
+					Description:  "Name of the Pokemon",
+					Required:     true,
+					Autocomplete: true,
 				},
 			},
 		},
-		handler: func(ctx context.Context, mdl *model.Model, sess *discordgo.Session, interaction *discordgo.InteractionCreate, opt options) error {
+		handler: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt options,
+		) (*discordgo.InteractionResponse, error) {
 			if builder.emojis == nil {
 				var guild *discordgo.Guild
 				for _, g := range sess.State.Guilds {
@@ -269,7 +280,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 					}
 				}
 				if guild == nil {
-					return fmt.Errorf("failed to get emotes: %w", ErrMissingResourceGuild)
+					return nil, fmt.Errorf("failed to get emotes: %w", ErrMissingResourceGuild)
 				}
 
 				builder.emojis = make(map[string]*discordgo.Emoji)
@@ -278,58 +289,48 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				}
 			}
 
-			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName)
+			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName.Value)
 			if err != nil {
 				if errors.Is(err, model.ErrWrongGeneration) {
-					err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					return &discordgo.InteractionResponse{
 						Type: discordgo.InteractionResponseChannelMessageWithSource,
 						Data: &discordgo.InteractionResponseData{
 							Content: "The specified Pokemon does not exist in this generation.",
 						},
-					})
-					if err != nil {
-						return fmt.Errorf("error while responding for incorrect generation: %w", err)
-					}
-
-					return nil
+					}, nil
 				} else {
-					err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+					return &discordgo.InteractionResponse{
 						Type: discordgo.InteractionResponseChannelMessageWithSource,
 						Data: &discordgo.InteractionResponseData{
 							Content: "No Pokemon found with that name.",
 						},
-					})
-					if err != nil {
-						return fmt.Errorf("error while responding for missing pokemon: %w", err)
-					}
-
-					return nil
+					}, nil
 				}
 			}
 
 			pokemonName, err := pokemon.LocalizedName(ctx)
 			if err != nil {
-				return fmt.Errorf("could not get localized name for pokemon %q: %w", pokemon.Name, err)
+				return nil, fmt.Errorf("could not get localized name for pokemon %q: %w", pokemon.Name, err)
 			}
 
 			if mdl.Generation == nil {
-				return fmt.Errorf("could not get localized name for generation: %w", model.ErrUnsetGeneration)
+				return nil, fmt.Errorf("could not get localized name for generation: %w", model.ErrUnsetGeneration)
 			}
 			genName, err := mdl.Generation.LocalizedName(ctx)
 			if err != nil {
-				return fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
+				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
 			pms, err := pokemon.PokemonMoves(ctx, defaultMethods)
 			if err != nil {
-				return fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
+				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
 			fields, err := movesToFields(ctx, pms)
 			if err != nil {
-				return fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
+				return nil, fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
 			}
 
-			err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			return &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Embeds: []*discordgo.MessageEmbed{
@@ -339,12 +340,39 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 						},
 					},
 				},
-			})
-			if err != nil {
-				return fmt.Errorf("error while responding to command: %w", err)
-			}
+			}, nil
+		},
+		autocomplete: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt options,
+		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+			switch {
+			case opt.PokemonName.Focused:
+				ps, err := mdl.SearchPokemon(ctx, opt.PokemonName.Value, 25)
+				if err != nil {
+					return nil, fmt.Errorf("error while searching for matching pokemon: %w", err)
+				}
 
-			return nil
+				choices := make([]*discordgo.ApplicationCommandOptionChoice, len(ps))
+				for i, pokemon := range ps {
+					name, err := pokemon.LocalizedName(ctx)
+					if err != nil {
+						return nil, fmt.Errorf("error while getting localized name for pokemon %q: %w", pokemon.Name, err)
+					}
+
+					choices[i] = &discordgo.ApplicationCommandOptionChoice{
+						Name:  name,
+						Value: pokemon.Name,
+					}
+				}
+
+				return choices, nil
+			default:
+				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
+			}
 		},
 	}, nil
 }

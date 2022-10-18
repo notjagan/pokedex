@@ -134,24 +134,34 @@ func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 		return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
 	}
 	bot.session.AddHandler(func(sess *discordgo.Session, interaction *discordgo.InteractionCreate) {
-		if interaction.ApplicationCommandData().Name == cmd.Name() {
-			guild, err := sess.State.Guild(interaction.GuildID)
-			if err != nil {
-				log.Printf("could not find guild while executing command %q: %v", cmd.Name(), err)
-				return
-			}
+		data := interaction.ApplicationCommandData()
+		guild, err := sess.State.Guild(interaction.GuildID)
+		if err != nil {
+			log.Printf("could not find guild while executing command %q: %v", cmd.Name(), err)
+			return
+		}
 
-			mdl, err := bot.model(guild)
-			if err != nil {
-				log.Printf("no model found for guild while executing command %q: %v", cmd.Name(), err)
-				return
-			}
+		mdl, err := bot.model(guild)
+		if err != nil {
+			log.Printf("no model found for guild while executing command %q: %v", cmd.Name(), err)
+			return
+		}
 
-			log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
-			err = cmd.CallHandler(ctx, mdl, sess, interaction)
-			if err != nil {
-				log.Printf("error while executing command %q: %v", cmd.Name(), err)
-				return
+		if data.Name == cmd.Name() {
+			switch interaction.Type {
+			case discordgo.InteractionApplicationCommand:
+				log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
+				err = cmd.Handler(ctx, mdl, sess, interaction)
+				if err != nil {
+					log.Printf("error while executing command %q: %v", cmd.Name(), err)
+				}
+			case discordgo.InteractionApplicationCommandAutocomplete:
+				err = cmd.Autocomplete(ctx, mdl, sess, interaction)
+				if err != nil {
+					log.Printf("error while generating autocompletions for command %q: %v", cmd.Name(), err)
+				}
+			default:
+				log.Printf("unrecognized interaction type %s for command %q", interaction.Type.String(), cmd.Name())
 			}
 		}
 	})
