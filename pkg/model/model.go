@@ -422,6 +422,9 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 	if m.language == nil {
 		return nil, ErrUnsetLanguage
 	}
+	if m.Generation == nil {
+		return nil, ErrUnsetGeneration
+	}
 
 	pattern := fmt.Sprintf("%s%%", prefix)
 	var ps []*Pokemon
@@ -431,11 +434,13 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 		FROM pokemon_v2_pokemon p
 		JOIN pokemon_v2_pokemonspeciesname n
 			ON p.pokemon_species_id = n.pokemon_species_id
-		WHERE n.name LIKE ? AND n.language_id = ?
+		JOIN pokemon_v2_pokemonspecies s
+			ON p.pokemon_species_id = s.id
+		WHERE n.name LIKE ? AND n.language_id = ? AND s.generation_id <= ?
 		GROUP BY p.pokemon_species_id
 		ORDER BY n.name ASC
 		LIMIT ?
-	`, pattern, m.language.ID, limit)
+	`, pattern, m.language.ID, m.Generation.ID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting pokemon with prefix: %w", err)
 	}

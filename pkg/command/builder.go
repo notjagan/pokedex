@@ -232,14 +232,14 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			values = append(values, classString)
 
 			if move.Power != nil {
-				values = append(values, fmt.Sprintf("%d POW", *move.Power))
+				values = append(values, fmt.Sprintf("%d `POWER`", *move.Power))
 			}
 
 			if move.Accuracy != nil {
 				values = append(values, fmt.Sprintf("%d%%", *move.Accuracy))
 			}
 
-			values = append(values, fmt.Sprintf("%d PP", move.PP))
+			values = append(values, fmt.Sprintf("%d `PP`", move.PP))
 
 			fields[i] = &discordgo.MessageEmbedField{
 				Name:  fmt.Sprintf("Lv. %-2d ▸ %s", pm.Level, name),
@@ -337,6 +337,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 						{
 							Title:  fmt.Sprintf("%s, %s", pokemonName, genName),
 							Fields: fields,
+							Color:  0x57f287,
 						},
 					},
 				},
