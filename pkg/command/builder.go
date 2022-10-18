@@ -144,7 +144,7 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
-			opt options,
+			opt *options,
 		) (*discordgo.InteractionResponse, error) {
 			switch {
 			case opt.Language != nil:
@@ -185,6 +185,7 @@ var ErrMissingResourceGuild = errors.New("resource guild not found")
 func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	type options struct {
 		PokemonName discordField[string] `option:"pokemon"`
+		MaxLevel    *int                 `option:"max_level"`
 	}
 
 	defaultMethods, err := builder.Model.LearnMethodsByName(ctx, []model.LearnMethodName{
@@ -250,6 +251,9 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 		return fields, nil
 	}
 
+	minLevel := 1.
+	maxLevel := 100.
+
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
 			Name:        "learnset",
@@ -262,6 +266,14 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 					Required:     true,
 					Autocomplete: true,
 				},
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "max_level",
+					Description: "Level cap for learnset",
+					Required:    false,
+					MinValue:    &minLevel,
+					MaxValue:    maxLevel,
+				},
 			},
 		},
 		handler: func(
@@ -269,7 +281,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
-			opt options,
+			opt *options,
 		) (*discordgo.InteractionResponse, error) {
 			if builder.emojis == nil {
 				var guild *discordgo.Guild
@@ -321,7 +333,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
-			pms, err := pokemon.PokemonMoves(ctx, defaultMethods)
+			pms, err := pokemon.PokemonMoves(ctx, defaultMethods, opt.MaxLevel, nil)
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
@@ -337,7 +349,6 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 						{
 							Title:  fmt.Sprintf("%s, %s", pokemonName, genName),
 							Fields: fields,
-							Color:  0x57f287,
 						},
 					},
 				},
@@ -348,7 +359,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
-			opt options,
+			opt *options,
 		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
 			switch {
 			case opt.PokemonName.Focused:

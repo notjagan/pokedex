@@ -245,7 +245,7 @@ func (m *Model) localizedLanguageName(ctx context.Context, lang *Language) (stri
 	return name, nil
 }
 
-func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*LearnMethod) ([]PokemonMove, error) {
+func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*LearnMethod, maxLevel int, limit int) ([]PokemonMove, error) {
 	if m.Generation == nil {
 		return nil, ErrUnsetGeneration
 	}
@@ -257,14 +257,19 @@ func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*L
 
 	query, args, err := sqlx.In(
 		/* sql */ `
-		SELECT MIN(m.id) as id, m.level, m.move_id, m.move_learn_method_id
-		FROM pokemon_v2_pokemonmove m
-		JOIN pokemon_v2_versiongroup v
-			ON m.version_group_id = v.id
-		WHERE m.pokemon_id = ? AND v.generation_id = ? AND m.move_learn_method_id IN (?)
-		GROUP BY m.move_id
-		ORDER BY m.level ASC
-	`, pokemon.ID, m.Generation.ID, ids)
+		SELECT id, level, move_id, move_learn_method_id FROM (
+			SELECT *, rank() OVER (ORDER BY level DESC) AS r FROM (
+				SELECT MIN(m.id) as id, m.level, m.move_id, m.move_learn_method_id
+				FROM pokemon_v2_pokemonmove m
+				JOIN pokemon_v2_versiongroup v
+					ON m.version_group_id = v.id
+				WHERE m.pokemon_id = ? AND v.generation_id = ? AND m.level <= ? AND m.move_learn_method_id IN (?)
+				GROUP BY m.move_id
+			)
+		)
+		WHERE ? < 0 OR r <= ?
+		ORDER BY r DESC
+	`, pokemon.ID, m.Generation.ID, maxLevel, ids, limit, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error while constructing query: %w", err)
 	}
