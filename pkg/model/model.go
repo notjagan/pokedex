@@ -14,7 +14,7 @@ type Model struct {
 	db *sqlx.DB
 
 	language   *Language
-	generation *Generation
+	Generation *Generation
 }
 
 func New(ctx context.Context, dbPath string) (*Model, error) {
@@ -36,9 +36,10 @@ func (m *Model) Close() error {
 
 var ErrUnsetLanguage = errors.New("model language is nil")
 
-func (m *Model) GetLanguage(ctx context.Context, code LocalizationCode) (*Language, error) {
+func (m *Model) languageByLocalizationCode(ctx context.Context, code LocalizationCode) (*Language, error) {
 	lang := Language{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT id, iso639
 		FROM pokemon_v2_language
 		WHERE iso639 = ?
@@ -50,7 +51,7 @@ func (m *Model) GetLanguage(ctx context.Context, code LocalizationCode) (*Langua
 }
 
 func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code LocalizationCode) error {
-	lang, err := m.GetLanguage(ctx, code)
+	lang, err := m.languageByLocalizationCode(ctx, code)
 	if err != nil {
 		return fmt.Errorf("error while getting language: %w", err)
 	}
@@ -72,7 +73,8 @@ var ErrUnsetGeneration = errors.New("model generation is nil")
 
 func (m *Model) SetGenerationByID(ctx context.Context, id int) error {
 	gen := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT id
 		FROM pokemon_v2_generation
 		WHERE id = ?
@@ -81,18 +83,15 @@ func (m *Model) SetGenerationByID(ctx context.Context, id int) error {
 		return fmt.Errorf("generation number %v not found: %w", id, err)
 	}
 
-	m.generation = &gen
+	m.Generation = &gen
 
 	return nil
 }
 
-func (m *Model) SetGeneration(ctx context.Context, gen *Generation) {
-	m.generation = gen
-}
-
 func (m *Model) EarliestGeneration(ctx context.Context) (*Generation, error) {
 	gen := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT MIN(id) AS id
 		FROM pokemon_v2_generation
 	`).StructScan(&gen)
@@ -105,7 +104,8 @@ func (m *Model) EarliestGeneration(ctx context.Context) (*Generation, error) {
 
 func (m *Model) LatestGeneration(ctx context.Context) (*Generation, error) {
 	gen := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT MAX(id) AS id
 		FROM pokemon_v2_generation
 	`).StructScan(&gen)
@@ -120,7 +120,8 @@ var ErrWrongGeneration = errors.New("selected resource does not exist in the cur
 
 func (m *Model) generationHasPokemon(ctx context.Context, gen *Generation, pokemon *Pokemon) (bool, error) {
 	g := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT generation_id AS id
 		FROM pokemon_v2_pokemonspecies
 		WHERE id = ?
@@ -133,11 +134,11 @@ func (m *Model) generationHasPokemon(ctx context.Context, gen *Generation, pokem
 }
 
 func (m *Model) validatePokemonGeneration(ctx context.Context, pokemon *Pokemon) error {
-	if m.generation == nil {
+	if m.Generation == nil {
 		return fmt.Errorf("failed to check if generation has pokemon: %w", ErrUnsetGeneration)
 	}
 
-	ok, err := m.generation.HasPokemon(ctx, pokemon)
+	ok, err := m.Generation.HasPokemon(ctx, pokemon)
 	if err != nil {
 		return fmt.Errorf("failed to check if generation has pokemon: %w", err)
 	} else if !ok {
@@ -149,7 +150,8 @@ func (m *Model) validatePokemonGeneration(ctx context.Context, pokemon *Pokemon)
 
 func (m *Model) PokemonById(ctx context.Context, id int) (*Pokemon, error) {
 	pokemon := Pokemon{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT id, name, pokemon_species_id
 		FROM pokemon_v2_pokemon
 		WHERE id = ?
@@ -168,7 +170,8 @@ func (m *Model) PokemonById(ctx context.Context, id int) (*Pokemon, error) {
 
 func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error) {
 	pokemon := Pokemon{model: m}
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT id, name, pokemon_species_id
 		FROM pokemon_v2_pokemon
 		WHERE name = ?
@@ -191,14 +194,15 @@ func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (str
 	}
 
 	var name string
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT name
 		FROM pokemon_v2_pokemonspeciesname
 		WHERE pokemon_species_id = ? AND language_id = ?
 	`, pokemon.SpeciesID, m.language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf(
-			"could not find name for pokemon %q for language with code %q: %w",
+			"could not find localized name for pokemon %q for language with code %q: %w",
 			pokemon.Name,
 			m.language.ISO639,
 			err,
@@ -212,7 +216,7 @@ func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
 	langs := make([]*Language, len(AllLocalizationCodes))
 
 	for i, code := range AllLocalizationCodes {
-		lang, err := m.GetLanguage(ctx, code)
+		lang, err := m.languageByLocalizationCode(ctx, code)
 		if err != nil {
 			return nil, fmt.Errorf("error while getting all languages: %w", err)
 		}
@@ -222,19 +226,193 @@ func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
 	return langs, nil
 }
 
-func (m *Model) getLocalizedLanguageName(ctx context.Context, lang *Language) (string, error) {
+func (m *Model) localizedLanguageName(ctx context.Context, lang *Language) (string, error) {
 	if m.language == nil {
 		return "", ErrUnsetLanguage
 	}
 
 	var name string
-	err := m.db.QueryRowxContext(ctx, `
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
 		SELECT name
 		FROM pokemon_v2_languagename
 		WHERE language_id = ? AND local_language_id = ?
 	`, lang.ID, m.language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf("error while getting localized name for language with code %q: %w", lang.ISO639, err)
+	}
+
+	return name, nil
+}
+
+func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*LearnMethod) ([]PokemonMove, error) {
+	if m.Generation == nil {
+		return nil, ErrUnsetGeneration
+	}
+
+	ids := make([]int, len(methods))
+	for i, method := range methods {
+		ids[i] = method.ID
+	}
+
+	query, args, err := sqlx.In(
+		/* sql */ `
+		SELECT MIN(m.id) as id, m.level, m.move_id, m.move_learn_method_id
+		FROM pokemon_v2_pokemonmove m
+		JOIN pokemon_v2_versiongroup v
+			ON m.version_group_id = v.id
+		WHERE m.pokemon_id = ? AND v.generation_id = ? AND m.move_learn_method_id IN (?)
+		GROUP BY m.move_id
+		ORDER BY m.level ASC
+	`, pokemon.ID, m.Generation.ID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("error while constructing query: %w", err)
+	}
+
+	moves := []PokemonMove{}
+	err = m.db.SelectContext(ctx, &moves, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting moves for pokemon in generation: %w", err)
+	}
+
+	for i := range moves {
+		moves[i].model = m
+	}
+
+	return moves, nil
+}
+
+func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {
+	move := Move{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, power, pp, accuracy, move_damage_class_id, type_id, name
+		FROM pokemon_v2_move
+		WHERE id = ?
+	`, ID).StructScan(&move)
+	if err != nil {
+		return nil, fmt.Errorf("no matching move found: %w", err)
+	}
+
+	return &move, nil
+}
+
+func (m *Model) typeByID(ctx context.Context, ID int) (*Type, error) {
+	typ := Type{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, name
+		FROM pokemon_v2_type
+		WHERE id = ?
+	`, ID).StructScan(&typ)
+	if err != nil {
+		return nil, fmt.Errorf("no matching type found: %w", err)
+	}
+
+	return &typ, nil
+}
+
+func (m *Model) learnMethodByID(ctx context.Context, ID int) (*LearnMethod, error) {
+	method := LearnMethod{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, name
+		FROM pokemon_v2_movelearnmethod
+		WHERE id = ?
+	`, ID).StructScan(&method)
+	if err != nil {
+		return nil, fmt.Errorf("no matching learn method found: %w", err)
+	}
+
+	return &method, nil
+}
+
+func (m *Model) learnMethodByName(ctx context.Context, name LearnMethodName) (*LearnMethod, error) {
+	method := LearnMethod{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, name
+		FROM pokemon_v2_movelearnmethod
+		WHERE name = ?
+	`, name).StructScan(&method)
+	if err != nil {
+		return nil, fmt.Errorf("no matching learn method found: %w", err)
+	}
+
+	return &method, nil
+}
+
+func (m *Model) LearnMethodsByName(ctx context.Context, names []LearnMethodName) ([]*LearnMethod, error) {
+	methods := make([]*LearnMethod, len(names))
+	for i, name := range names {
+		method, err := m.learnMethodByName(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get learn method for name %q: %w", name, err)
+		}
+		methods[i] = method
+	}
+
+	return methods, nil
+}
+
+func (m *Model) damageClassByID(ctx context.Context, ID int) (*DamageClass, error) {
+	class := DamageClass{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, name
+		FROM pokemon_v2_movedamageclass
+		WHERE id = ?
+	`, ID).StructScan(&class)
+	if err != nil {
+		return nil, fmt.Errorf("no matching damage class found: %w", err)
+	}
+
+	return &class, nil
+}
+
+func (m *Model) localizedMoveName(ctx context.Context, move *Move) (string, error) {
+	if m.language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_movename
+		WHERE move_id = ? AND language_id = ?
+	`, move.ID, m.language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not find localized name for move %q for language with code %q: %w",
+			move.Name,
+			m.language.ISO639,
+			err,
+		)
+	}
+
+	return name, nil
+}
+
+func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (string, error) {
+	if m.language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_generationname
+		WHERE generation_id = ? AND language_id = ?
+	`, gen.ID, m.language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not find localized name for generation %d for language with code %q: %w",
+			gen.ID,
+			m.language.ISO639,
+			err,
+		)
 	}
 
 	return name, nil

@@ -20,12 +20,18 @@ type Bot struct {
 }
 
 func New(ctx context.Context, config config.Config) (*Bot, error) {
-	cmds, err := command.All(ctx, config.DB.Path)
+	sess, err := discordgo.New("Bot " + config.Discord.Token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to instantiate discord bot: %w", err)
+	}
+
+	cmds, err := command.All(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting all commands for bot: %w", err)
 	}
 
 	return &Bot{
+		session:  sess,
 		config:   config,
 		commands: cmds,
 		models:   make(map[string]*model.Model),
@@ -62,7 +68,7 @@ func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
 	if err != nil {
 		return fmt.Errorf("error while getting default generation: %w", err)
 	}
-	mdl.SetGeneration(ctx, gen)
+	mdl.Generation = gen
 
 	return nil
 }
@@ -83,13 +89,7 @@ func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
 }
 
 func (bot *Bot) initialize(ctx context.Context) error {
-	sess, err := discordgo.New("Bot " + bot.config.Discord.Token)
-	if err != nil {
-		return fmt.Errorf("failed to instantiate discord bot: %w", err)
-	}
-	bot.session = sess
-
-	err = bot.session.Open()
+	err := bot.session.Open()
 	if err != nil {
 		return fmt.Errorf("failed to start discord session: %w", err)
 	}

@@ -8,7 +8,8 @@ import (
 
 type Config struct {
 	Discord struct {
-		Token string `toml:"token"`
+		Token           string `toml:"token"`
+		ResourceGuildID string `toml:"resource_guild_id"`
 	} `toml:"discord"`
 	DB struct {
 		Path string `toml:"path"`

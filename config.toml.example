@@ -1,5 +1,6 @@
 [discord]
     token = "<Discord API token>"
+    resource_guild_id = "<Guild ID>"
 
 [database]
     path = "db.sqlite3"

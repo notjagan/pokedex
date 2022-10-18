@@ -38,5 +38,5 @@ func LocaleToLocalizationCode(locale discordgo.Locale) (LocalizationCode, error)
 }
 
 func (lang *Language) LocalizedName(ctx context.Context) (string, error) {
-	return lang.model.getLocalizedLanguageName(ctx, lang)
+	return lang.model.localizedLanguageName(ctx, lang)
 }

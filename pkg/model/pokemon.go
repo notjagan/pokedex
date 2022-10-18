@@ -10,6 +10,10 @@ type Pokemon struct {
 	SpeciesID int    `db:"pokemon_species_id"`
 }
 
-func (p *Pokemon) LocalizedName(ctx context.Context) (string, error) {
-	return p.model.localizedPokemonName(ctx, p)
+func (pokemon *Pokemon) LocalizedName(ctx context.Context) (string, error) {
+	return pokemon.model.localizedPokemonName(ctx, pokemon)
+}
+
+func (pokemon *Pokemon) PokemonMoves(ctx context.Context, methods []*LearnMethod) ([]PokemonMove, error) {
+	return pokemon.model.pokemonMoves(ctx, pokemon, methods)
 }
