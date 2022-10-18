@@ -21,8 +21,8 @@ type Command interface {
 
 type command[T any] struct {
 	applicationCommand *discordgo.ApplicationCommand
-	handler            handler[T, *discordgo.InteractionResponse]
-	autocomplete       handler[T, []*discordgo.ApplicationCommandOptionChoice]
+	handler            handler[*T, *discordgo.InteractionResponse]
+	autocomplete       handler[*T, []*discordgo.ApplicationCommandOptionChoice]
 }
 
 func (cmd command[T]) ApplicationCommand() *discordgo.ApplicationCommand {
@@ -45,7 +45,7 @@ func (cmd command[T]) Handler(
 		return fmt.Errorf("error while decoding options for command: %w", err)
 	}
 
-	resp, err := cmd.handler(ctx, mdl, sess, interaction, structure)
+	resp, err := cmd.handler(ctx, mdl, sess, interaction, &structure)
 	if err != nil {
 		return fmt.Errorf("error while calling handler: %w", err)
 	}
@@ -70,7 +70,7 @@ func (cmd command[T]) Autocomplete(
 		return fmt.Errorf("error while decoding options for autocomplete: %w", err)
 	}
 
-	choices, err := cmd.autocomplete(ctx, mdl, sess, interaction, structure)
+	choices, err := cmd.autocomplete(ctx, mdl, sess, interaction, &structure)
 	if err != nil {
 		return fmt.Errorf("error while calling autocompletion handler: %w", err)
 	}
@@ -105,7 +105,7 @@ var fieldTypes = map[reflect.Type]bool{
 	reflect.TypeOf(discordField[bool]{}):   true,
 }
 
-func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption, pointer any) (ret error) {
+func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption, structure any) (ret error) {
 	defer func() {
 		r := recover()
 		if err, ok := r.(reflect.ValueError); ok {
@@ -115,22 +115,15 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 		}
 	}()
 
-	t := reflect.TypeOf(pointer)
-	if t.Kind() != reflect.Pointer {
-		return fmt.Errorf("cannot populate values for non-pointer: %w", ErrDecodeOption)
-	}
-	if t.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("cannot assign fields to non-struct element: %w", ErrDecodeOption)
-	}
-	if reflect.ValueOf(pointer).IsNil() {
-		return fmt.Errorf("pointer to structure must not be nil: %w", ErrDecodeOption)
+	value := reflect.Indirect(reflect.ValueOf(structure))
+	if !value.CanAddr() {
+		return fmt.Errorf("value is not addressable: %w", ErrDecodeOption)
 	}
 
-	structure := reflect.ValueOf(pointer).Elem()
-	m := make(map[string]reflect.Value, structure.NumField())
-	for i := 0; i < structure.NumField(); i++ {
-		field := structure.Field(i)
-		tfield := t.Elem().Field(i)
+	m := make(map[string]reflect.Value, value.NumField())
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+		tfield := value.Type().Field(i)
 		option := tfield.Tag.Get("option")
 		if option == "" {
 			continue
@@ -148,6 +141,12 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 			return fmt.Errorf("unexpected option name %q: %w", option.Name, ErrDecodeOption)
 		}
 
+		if field.Kind() == reflect.Pointer {
+			ptr := reflect.New(field.Type().Elem())
+			field.Set(ptr)
+
+			field = ptr.Elem()
+		}
 		if field.Kind() == reflect.Struct && fieldTypes[field.Type()] {
 			backing := field.FieldByName("Value")
 			backing.Set(reflect.Zero(backing.Type()))
@@ -174,11 +173,8 @@ func decodeOptions(options []*discordgo.ApplicationCommandInteractionDataOption,
 				continue
 			}
 		case discordgo.ApplicationCommandOptionSubCommand:
-			if field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Struct {
-				ptr := reflect.New(field.Type().Elem())
-				field.Set(ptr)
-
-				err := decodeOptions(option.Options, ptr.Interface())
+			if field.Kind() == reflect.Struct {
+				err := decodeOptions(option.Options, field.Addr().Interface())
 				if err != nil {
 					return fmt.Errorf("error while decoding options for subcommand %q: %w", option.Name, err)
 				}
