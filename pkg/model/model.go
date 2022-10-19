@@ -245,9 +245,31 @@ func (m *Model) localizedLanguageName(ctx context.Context, lang *Language) (stri
 	return name, nil
 }
 
-func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*LearnMethod, maxLevel int, limit int) ([]PokemonMove, error) {
+func (m *Model) searchPokemonMoves(
+	ctx context.Context,
+	pokemon *Pokemon,
+	methods []*LearnMethod,
+	maxLevel *int,
+	top *int,
+	limit int,
+	offset int,
+) ([]PokemonMove, bool, error) {
 	if m.Generation == nil {
-		return nil, ErrUnsetGeneration
+		return nil, false, ErrUnsetGeneration
+	}
+
+	var lvl int
+	if maxLevel == nil {
+		lvl = 100
+	} else {
+		lvl = *maxLevel
+	}
+
+	var t int
+	if top == nil {
+		t = -1
+	} else {
+		t = *top
 	}
 
 	ids := make([]int, len(methods))
@@ -269,22 +291,31 @@ func (m *Model) pokemonMoves(ctx context.Context, pokemon *Pokemon, methods []*L
 		)
 		WHERE ? < 0 OR r <= ?
 		ORDER BY r DESC
-	`, pokemon.ID, m.Generation.ID, maxLevel, ids, limit, limit)
+		LIMIT ? OFFSET ?
+	`, pokemon.ID, m.Generation.ID, lvl, ids, t, t, limit+1, offset)
 	if err != nil {
-		return nil, fmt.Errorf("error while constructing query: %w", err)
+		return nil, false, fmt.Errorf("error while constructing query: %w", err)
 	}
 
 	moves := []PokemonMove{}
 	err = m.db.SelectContext(ctx, &moves, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("error while getting moves for pokemon in generation: %w", err)
+		return nil, false, fmt.Errorf("error while getting moves for pokemon in generation: %w", err)
 	}
 
 	for i := range moves {
 		moves[i].model = m
 	}
 
-	return moves, nil
+	var hasNext bool
+	if len(moves) == limit+1 {
+		moves = moves[:limit]
+		hasNext = true
+	} else {
+		hasNext = false
+	}
+
+	return moves, hasNext, nil
 }
 
 func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {

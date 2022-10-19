@@ -16,9 +16,10 @@ type commandFunc func(*Builder, context.Context) (Command, error)
 type Builder struct {
 	Model *model.Model
 
-	config config.Config
-	funcs  []commandFunc
-	emojis map[string]*discordgo.Emoji
+	config     config.Config
+	funcs      []commandFunc
+	emojis     map[string]*discordgo.Emoji
+	fieldLimit int
 }
 
 func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Builder {
@@ -31,6 +32,7 @@ func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Build
 			(*Builder).learnset,
 			(*Builder).moves,
 		},
+		fieldLimit: 15,
 	}
 }
 
@@ -140,13 +142,13 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 				},
 			},
 		},
-		handler: func(
+		handle: func(
 			ctx context.Context,
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
 			opt *options,
-		) (*discordgo.InteractionResponse, error) {
+		) (*discordgo.InteractionResponseData, error) {
 			switch {
 			case opt.Language != nil:
 				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(opt.Language.LocalizationCode))
@@ -154,11 +156,8 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 					return nil, fmt.Errorf("error while changing language: %w", err)
 				}
 
-				return &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Language successfully changed.",
-					},
+				return &discordgo.InteractionResponseData{
+					Content: "Language successfully changed.",
 				}, nil
 
 			case opt.Generation != nil:
@@ -167,11 +166,8 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 					return nil, fmt.Errorf("error while changing generation: %w", err)
 				}
 
-				return &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Generation successfully changed.",
-					},
+				return &discordgo.InteractionResponseData{
+					Content: "Generation successfully changed.",
 				}, nil
 
 			default:
@@ -283,6 +279,75 @@ func (builder *Builder) checkEmojis(sess *discordgo.Session) error {
 	return nil
 }
 
+func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
+	if p.Page.Offset == 0 && !hasNext {
+		return nil, nil
+	}
+
+	phome := paginator[T]{
+		Options: p.Options,
+		Page: Page{
+			Limit:  p.Page.Limit,
+			Offset: 0,
+		},
+	}
+	homeID, err := customID(phome)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create next button: %w", err)
+	}
+	homeButton := discordgo.Button{
+		Style:    discordgo.PrimaryButton,
+		Label:    "⏮",
+		CustomID: homeID,
+		Disabled: p.Page.Offset == 0,
+	}
+
+	prevOffset := p.Page.Offset - p.Page.Limit
+	pprev := paginator[T]{
+		Options: p.Options,
+		Page: Page{
+			Limit:  p.Page.Limit,
+			Offset: prevOffset,
+		},
+	}
+	prevID, err := customID(pprev)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create previous button: %w", err)
+	}
+	prevButton := discordgo.Button{
+		Style:    discordgo.PrimaryButton,
+		Label:    "⏴",
+		CustomID: prevID,
+		Disabled: prevOffset < 0,
+	}
+
+	pnext := paginator[T]{
+		Options: p.Options,
+		Page: Page{
+			Limit:  p.Page.Limit,
+			Offset: p.Page.Offset + p.Page.Limit,
+		},
+	}
+	nextID, err := customID(pnext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create next button: %w", err)
+	}
+	nextButton := discordgo.Button{
+		Style:    discordgo.PrimaryButton,
+		Label:    "⏵",
+		CustomID: nextID,
+		Disabled: !hasNext,
+	}
+
+	return &discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			homeButton,
+			prevButton,
+			nextButton,
+		},
+	}, nil
+}
+
 func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	type options struct {
 		PokemonName discordField[string] `option:"pokemon"`
@@ -321,33 +386,27 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				},
 			},
 		},
-		handler: func(
+		paginate: func(
 			ctx context.Context,
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
-			opt *options,
-		) (*discordgo.InteractionResponse, error) {
+			p paginator[options],
+		) (*discordgo.InteractionResponseData, error) {
 			err := builder.checkEmojis(sess)
 			if err != nil {
 				return nil, err
 			}
 
-			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName.Value)
+			pokemon, err := mdl.PokemonByName(ctx, p.Options.PokemonName.Value)
 			if err != nil {
 				if errors.Is(err, model.ErrWrongGeneration) {
-					return &discordgo.InteractionResponse{
-						Type: discordgo.InteractionResponseChannelMessageWithSource,
-						Data: &discordgo.InteractionResponseData{
-							Content: "The specified Pokemon does not exist in this generation.",
-						},
+					return &discordgo.InteractionResponseData{
+						Content: "The specified Pokemon does not exist in this generation.",
 					}, nil
 				} else {
-					return &discordgo.InteractionResponse{
-						Type: discordgo.InteractionResponseChannelMessageWithSource,
-						Data: &discordgo.InteractionResponseData{
-							Content: "No Pokemon found with that name.",
-						},
+					return &discordgo.InteractionResponseData{
+						Content: "No Pokemon found with that name.",
 					}, nil
 				}
 			}
@@ -365,13 +424,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
-			var lvl int
-			if opt.MaxLevel == nil {
-				lvl = 100
-			} else {
-				lvl = *opt.MaxLevel
-			}
-			pms, err := pokemon.PokemonMoves(ctx, defaultMethods, lvl, -1)
+			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, p.Options.MaxLevel, nil, p.Page.Limit, p.Page.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
@@ -384,15 +437,22 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				Title:  fmt.Sprintf("%s, %s", pokemonName, genName),
 				Fields: fields,
 			}
-			if opt.MaxLevel != nil {
-				embed.Description = fmt.Sprintf("Max Level %d", *opt.MaxLevel)
+			if p.Options.MaxLevel != nil {
+				embed.Description = fmt.Sprintf("Max Level %d", *p.Options.MaxLevel)
 			}
 
-			return &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Embeds: []*discordgo.MessageEmbed{embed},
-				},
+			buttons, err := p.moveButtons(hasNext)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate pagination buttons: %w", err)
+			}
+			var components []discordgo.MessageComponent
+			if buttons != nil {
+				components = []discordgo.MessageComponent{buttons}
+			}
+
+			return &discordgo.InteractionResponseData{
+				Embeds:     []*discordgo.MessageEmbed{embed},
+				Components: components,
 			}, nil
 		},
 		autocomplete: func(
@@ -409,6 +469,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
 		},
+		limit: &builder.fieldLimit,
 	}, nil
 }
 
@@ -450,33 +511,27 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				},
 			},
 		},
-		handler: func(
+		paginate: func(
 			ctx context.Context,
 			mdl *model.Model,
 			sess *discordgo.Session,
 			interaction *discordgo.InteractionCreate,
-			opt *options,
-		) (*discordgo.InteractionResponse, error) {
+			p paginator[options],
+		) (*discordgo.InteractionResponseData, error) {
 			err := builder.checkEmojis(sess)
 			if err != nil {
 				return nil, err
 			}
 
-			pokemon, err := mdl.PokemonByName(ctx, opt.PokemonName.Value)
+			pokemon, err := mdl.PokemonByName(ctx, p.Options.PokemonName.Value)
 			if err != nil {
 				if errors.Is(err, model.ErrWrongGeneration) {
-					return &discordgo.InteractionResponse{
-						Type: discordgo.InteractionResponseChannelMessageWithSource,
-						Data: &discordgo.InteractionResponseData{
-							Content: "The specified Pokemon does not exist in this generation.",
-						},
+					return &discordgo.InteractionResponseData{
+						Content: "The specified Pokemon does not exist in this generation.",
 					}, nil
 				} else {
-					return &discordgo.InteractionResponse{
-						Type: discordgo.InteractionResponseChannelMessageWithSource,
-						Data: &discordgo.InteractionResponseData{
-							Content: "No Pokemon found with that name.",
-						},
+					return &discordgo.InteractionResponseData{
+						Content: "No Pokemon found with that name.",
 					}, nil
 				}
 			}
@@ -494,7 +549,8 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
-			pms, err := pokemon.PokemonMoves(ctx, defaultMethods, opt.Level, 4)
+			top := 4
+			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, &p.Options.Level, &top, p.Page.Limit, p.Page.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
@@ -503,17 +559,24 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
 			}
 
-			return &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Embeds: []*discordgo.MessageEmbed{
-						{
-							Title:       fmt.Sprintf("%s, %s", pokemonName, genName),
-							Description: fmt.Sprintf("Level %d", opt.Level),
-							Fields:      fields,
-						},
-					},
-				},
+			embed := &discordgo.MessageEmbed{
+				Title:       fmt.Sprintf("%s, %s", pokemonName, genName),
+				Description: fmt.Sprintf("Lv. %d", p.Options.Level),
+				Fields:      fields,
+			}
+
+			buttons, err := p.moveButtons(hasNext)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate pagination buttons: %w", err)
+			}
+			var components []discordgo.MessageComponent
+			if buttons != nil {
+				components = []discordgo.MessageComponent{buttons}
+			}
+
+			return &discordgo.InteractionResponseData{
+				Embeds:     []*discordgo.MessageEmbed{embed},
+				Components: components,
 			}, nil
 		},
 		autocomplete: func(
@@ -530,6 +593,7 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
 		},
+		limit: &builder.fieldLimit,
 	}, nil
 }
 
