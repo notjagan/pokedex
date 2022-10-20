@@ -140,22 +140,10 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 		Language *struct {
 			LocalizationCode string `option:"language"`
 		} `option:"language"`
-		Generation *struct {
-			ID int `option:"generation_number"`
-		} `option:"generation"`
+		Version *struct {
+			Name string `option:"version"`
+		} `option:"version"`
 	}
-
-	gen, err := builder.Model.EarliestGeneration(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting min gen for set command: %w", err)
-	}
-	minGen := float64(gen.ID)
-
-	gen, err = builder.Model.LatestGeneration(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting max gen for set command: %w", err)
-	}
-	maxGen := float64(gen.ID)
 
 	langs, err := builder.Model.AllLanguages(ctx)
 	if err != nil {
@@ -181,16 +169,14 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "generation",
-					Description: "Set Pokemon generation",
+					Name:        "version",
+					Description: "Set Pokemon version",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
-							Type:        discordgo.ApplicationCommandOptionInteger,
-							Name:        "generation_number",
-							Description: "Game generation to pull data from",
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "version",
+							Description: "Game version to pull data from",
 							Required:    true,
-							MinValue:    &minGen,
-							MaxValue:    maxGen,
 						},
 					},
 				},
@@ -228,14 +214,14 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 					Content: "Language successfully changed.",
 				}, nil
 
-			case opt.Generation != nil:
-				err := mdl.SetGenerationByID(ctx, opt.Generation.ID)
+			case opt.Version != nil:
+				err := mdl.SetVersionByName(ctx, opt.Version.Name)
 				if err != nil {
-					return nil, fmt.Errorf("error while changing generation: %w", err)
+					return nil, fmt.Errorf("error while changing version: %w", err)
 				}
 
 				return &discordgo.InteractionResponseData{
-					Content: "Generation successfully changed.",
+					Content: "Version successfully changed.",
 				}, nil
 
 			default:
@@ -474,7 +460,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				} else {
 					return &discordgo.InteractionResponseData{
 						Content: "No Pokemon found with that name.",
-					}, nil
+					}, fmt.Errorf("error while querying for pokemon with name %q: %w", p.Options.PokemonName.Value, err)
 				}
 			}
 
@@ -483,12 +469,16 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for pokemon %q: %w", pokemon.Name, err)
 			}
 
-			if mdl.Generation == nil {
-				return nil, fmt.Errorf("could not get localized name for generation: %w", model.ErrUnsetGeneration)
+			if mdl.Version == nil {
+				return nil, fmt.Errorf("could not get localized name for version: %w", model.ErrUnsetVersion)
 			}
-			genName, err := mdl.Generation.LocalizedName(ctx)
+			gen, err := mdl.Version.Generation(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
+				return nil, fmt.Errorf("could not get generation for model version: %w", err)
+			}
+			genName, err := gen.LocalizedName(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("could not get localized name for generation %d: %w", gen.ID, err)
 			}
 
 			methodNames := defaultMethodNames[:]
@@ -613,12 +603,16 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for pokemon %q: %w", pokemon.Name, err)
 			}
 
-			if mdl.Generation == nil {
-				return nil, fmt.Errorf("could not get localized name for generation: %w", model.ErrUnsetGeneration)
+			if mdl.Version == nil {
+				return nil, fmt.Errorf("could not get localized name for version: %w", model.ErrUnsetVersion)
 			}
-			genName, err := mdl.Generation.LocalizedName(ctx)
+			gen, err := mdl.Version.Generation(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
+				return nil, fmt.Errorf("could not get generation for model version: %w", err)
+			}
+			genName, err := gen.LocalizedName(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("could not get localized name for generation %d: %w", gen.ID, err)
 			}
 
 			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, &p.Options.Level, &numMoves, p.Page.Limit, p.Page.Offset)

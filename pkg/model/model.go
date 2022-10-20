@@ -13,8 +13,8 @@ import (
 type Model struct {
 	db *sqlx.DB
 
-	Language   *Language
-	Generation *Generation
+	Language *Language
+	Version  *Version
 }
 
 func New(ctx context.Context, dbPath string) (*Model, error) {
@@ -65,85 +65,90 @@ func (m *Model) SetLanguageByLocale(ctx context.Context, locale discordgo.Locale
 	if err != nil {
 		code, err = LocaleToLocalizationCode(discordgo.EnglishUS)
 		if err != nil {
-			return fmt.Errorf("error while decoding preferred locale: error while decoding default locale: %w", err)
+			return fmt.Errorf("error while decoding preferred locale: %w",
+				fmt.Errorf("error while decoding default locale: %w", err),
+			)
 		}
 	}
 
 	return m.SetLanguageByLocalizationCode(ctx, code)
 }
 
-var ErrUnsetGeneration = errors.New("model generation is nil")
-
-func (m *Model) SetGenerationByID(ctx context.Context, id int) error {
-	gen := Generation{model: m}
+func (m *Model) versionByName(ctx context.Context, name string) (*Version, error) {
+	ver := Version{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
-		SELECT id
-		FROM pokemon_v2_generation
-		WHERE id = ?
-	`, id).StructScan(&gen)
+		SELECT id, version_group_id, name
+		FROM pokemon_v2_version
+		WHERE name = ?
+	`, name).StructScan(&ver)
 	if err != nil {
-		return fmt.Errorf("generation number %v not found: %w", id, err)
+		return nil, fmt.Errorf("version %q not found: %w", name, err)
 	}
 
-	m.Generation = &gen
+	return &ver, nil
+}
+
+var ErrUnsetVersion = errors.New("model version is nil")
+
+func (m *Model) SetVersionByName(ctx context.Context, name string) error {
+	ver, err := m.versionByName(ctx, name)
+	if err != nil {
+		return fmt.Errorf("version %q not found: %w", name, err)
+	}
+
+	m.Version = ver
 
 	return nil
 }
 
-func (m *Model) EarliestGeneration(ctx context.Context) (*Generation, error) {
-	gen := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx,
-		/* sql */ `
-		SELECT MIN(id) AS id
-		FROM pokemon_v2_generation
-	`).StructScan(&gen)
-	if err != nil {
-		return nil, fmt.Errorf("could not find latest generation")
-	}
-
-	return &gen, nil
-}
-
-func (m *Model) LatestGeneration(ctx context.Context) (*Generation, error) {
-	gen := Generation{model: m}
-	err := m.db.QueryRowxContext(ctx,
-		/* sql */ `
-		SELECT MAX(id) AS id
-		FROM pokemon_v2_generation
-	`).StructScan(&gen)
-	if err != nil {
-		return nil, fmt.Errorf("could not find latest generation")
-	}
-
-	return &gen, nil
-}
-
 var ErrWrongGeneration = errors.New("selected resource does not exist in the current generation")
 
-func (m *Model) generationHasPokemon(ctx context.Context, gen *Generation, pokemon *Pokemon) (bool, error) {
-	g := Generation{model: m}
+func (m *Model) versionGeneration(ctx context.Context, ver *Version) (*Generation, error) {
+	gen := Generation{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
-		SELECT generation_id AS id
-		FROM pokemon_v2_pokemonspecies
+		SELECT generation_id as id
+		FROM pokemon_v2_versiongroup
 		WHERE id = ?
-	`, pokemon.SpeciesID).StructScan(&g)
+	`, ver.VersionGroupID).StructScan(&gen)
 	if err != nil {
-		return false, fmt.Errorf("could not find generation for pokemon: %w", err)
+		return nil, fmt.Errorf("could not find generation for version %q: %w", ver.Name, err)
 	}
 
-	return gen.ID >= g.ID, nil
+	return &gen, nil
 }
 
-func (m *Model) validatePokemonGeneration(ctx context.Context, pokemon *Pokemon) error {
-	if m.Generation == nil {
-		return fmt.Errorf("failed to check if generation has pokemon: %w", ErrUnsetGeneration)
+func (m *Model) versionHasPokemon(ctx context.Context, ver *Version, pokemon *Pokemon) (bool, error) {
+	gen, err := ver.Generation(ctx)
+	if err != nil {
+		return false, fmt.Errorf("error while getting generation for queried version: %w", err)
 	}
 
-	ok, err := m.Generation.HasPokemon(ctx, pokemon)
+	var exists bool
+	err = m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pokemon_v2_pokemonspecies s
+			WHERE s.ID = ? AND s.generation_id <= ?
+		)
+	`, pokemon.SpeciesID, gen.ID).Scan(&exists)
 	if err != nil {
-		return fmt.Errorf("failed to check if generation has pokemon: %w", err)
+		return false, fmt.Errorf("error while querying pokemon generation: %w", err)
+	}
+
+	return exists, nil
+}
+
+func (m *Model) validatePokemonVersion(ctx context.Context, pokemon *Pokemon) error {
+	if m.Version == nil {
+		return fmt.Errorf("failed to check if version has pokemon: %w", ErrUnsetVersion)
+	}
+
+	ok, err := m.Version.HasPokemon(ctx, pokemon)
+	if err != nil {
+		return fmt.Errorf("failed to check if version has pokemon: %w", err)
 	} else if !ok {
 		return ErrWrongGeneration
 	}
@@ -163,7 +168,7 @@ func (m *Model) PokemonById(ctx context.Context, id int) (*Pokemon, error) {
 		return nil, fmt.Errorf("no matching pokemon found: %w", err)
 	}
 
-	err = m.validatePokemonGeneration(ctx, &pokemon)
+	err = m.validatePokemonVersion(ctx, &pokemon)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pokemon for generation: %w", err)
 	}
@@ -183,7 +188,7 @@ func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error
 		return nil, fmt.Errorf("no matching pokemon found: %w", err)
 	}
 
-	err = m.validatePokemonGeneration(ctx, &pokemon)
+	err = m.validatePokemonVersion(ctx, &pokemon)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pokemon for generation: %w", err)
 	}
@@ -215,15 +220,33 @@ func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (str
 	return name, nil
 }
 
-func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
-	langs := make([]*Language, len(AllLocalizationCodes))
+func (m *Model) AllVersions(ctx context.Context) ([]Version, error) {
+	var vers []Version
+	err := m.db.SelectContext(ctx, &vers,
+		/* sql */ `
+		SELECT id, version_group_id, name
+		FROM pokemon_v2_version
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting all versions: %w", err)
+	}
+
+	for i := range vers {
+		vers[i].model = m
+	}
+
+	return vers, nil
+}
+
+func (m *Model) AllLanguages(ctx context.Context) ([]Language, error) {
+	langs := make([]Language, len(AllLocalizationCodes))
 
 	for i, code := range AllLocalizationCodes {
 		lang, err := m.languageByLocalizationCode(ctx, code)
 		if err != nil {
 			return nil, fmt.Errorf("error while getting all languages: %w", err)
 		}
-		langs[i] = lang
+		langs[i] = *lang
 	}
 
 	return langs, nil
@@ -257,8 +280,8 @@ func (m *Model) searchPokemonMoves(
 	limit int,
 	offset int,
 ) ([]PokemonMove, bool, error) {
-	if m.Generation == nil {
-		return nil, false, ErrUnsetGeneration
+	if m.Version == nil {
+		return nil, false, ErrUnsetVersion
 	}
 
 	var lvl int
@@ -284,23 +307,21 @@ func (m *Model) searchPokemonMoves(
 		/* sql */ `
 		SELECT id, level, move_id, move_learn_method_id FROM (
 			SELECT *, rank() OVER (ORDER BY level DESC) AS r FROM (
-				SELECT MIN(m.id) as id, m.level, m.move_id, m.move_learn_method_id
-				FROM pokemon_v2_pokemonmove m
-				JOIN pokemon_v2_versiongroup v
-					ON m.version_group_id = v.id
-				WHERE m.pokemon_id = ? AND v.generation_id = ? AND m.level <= ? AND m.move_learn_method_id IN (?)
-				GROUP BY m.move_id
+				SELECT MIN(id) as id, level, move_id, move_learn_method_id
+				FROM pokemon_v2_pokemonmove
+				WHERE pokemon_id = ? AND version_group_id = ? AND level <= ? AND move_learn_method_id IN (?)
+				GROUP BY move_id
 			)
 		)
 		WHERE ? < 0 OR r <= ?
 		ORDER BY r DESC
 		LIMIT ? OFFSET ?
-	`, pokemon.ID, m.Generation.ID, lvl, ids, t, t, limit+1, offset)
+	`, pokemon.ID, m.Version.VersionGroupID, lvl, ids, t, t, limit+1, offset)
 	if err != nil {
 		return nil, false, fmt.Errorf("error while constructing query: %w", err)
 	}
 
-	moves := []PokemonMove{}
+	var moves []PokemonMove
 	err = m.db.SelectContext(ctx, &moves, query, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("error while getting moves for pokemon in generation: %w", err)
@@ -457,17 +478,46 @@ func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (s
 	return name, nil
 }
 
+func (m *Model) localizedVersionName(ctx context.Context, ver *Version) (string, error) {
+	if m.Language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_versionname
+		WHERE version_id = ? AND language_id = ?
+	`, ver.ID, m.Language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not find localized name for version %q for language with code %q: %w",
+			ver.Name,
+			m.Language.ISO639,
+			err,
+		)
+	}
+
+	return name, nil
+}
+
 func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]*Pokemon, error) {
 	if m.Language == nil {
 		return nil, ErrUnsetLanguage
 	}
-	if m.Generation == nil {
-		return nil, ErrUnsetGeneration
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
 	}
 
 	pattern := fmt.Sprintf("%s%%", prefix)
 	var ps []*Pokemon
-	err := m.db.SelectContext(ctx, &ps,
+	err = m.db.SelectContext(ctx, &ps,
 		/* sql */ `
 		SELECT MIN(p.id) as id, p.name, p.pokemon_species_id
 		FROM pokemon_v2_pokemon p
@@ -479,7 +529,7 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 		GROUP BY p.pokemon_species_id
 		ORDER BY n.name ASC
 		LIMIT ?
-	`, pattern, m.Language.ID, m.Generation.ID, limit)
+	`, pattern, m.Language.ID, gen.ID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting pokemon with prefix: %w", err)
 	}

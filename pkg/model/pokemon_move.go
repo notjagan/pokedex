@@ -33,7 +33,7 @@ func (pm *PokemonMove) LearnMethod(ctx context.Context) (*LearnMethod, error) {
 	if pm.learnMethod == nil {
 		method, err := pm.model.learnMethodByID(ctx, pm.LearnMethodID)
 		if err != nil {
-			return nil, fmt.Errorf("error while getting learn method: %w", err)
+			return nil, fmt.Errorf("error while getting learn method for pokemon move: %w", err)
 		}
 		pm.learnMethod = method
 	}

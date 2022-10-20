@@ -64,11 +64,10 @@ func (bot *Bot) addModel(ctx context.Context, ID string, locale discordgo.Locale
 		return nil, fmt.Errorf("error while setting language: %w", err)
 	}
 
-	gen, err := mdl.LatestGeneration(ctx)
+	err = mdl.SetVersionByName(ctx, string(model.VersionNameSword))
 	if err != nil {
-		return nil, fmt.Errorf("error while getting default generation: %w", err)
+		return nil, fmt.Errorf("error while setting default version: %w", err)
 	}
-	mdl.Generation = gen
 
 	return mdl, nil
 }
