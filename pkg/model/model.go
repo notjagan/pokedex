@@ -13,7 +13,7 @@ import (
 type Model struct {
 	db *sqlx.DB
 
-	language   *Language
+	Language   *Language
 	Generation *Generation
 }
 
@@ -55,7 +55,7 @@ func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code Localiza
 	if err != nil {
 		return fmt.Errorf("error while getting language: %w", err)
 	}
-	m.language = lang
+	m.Language = lang
 
 	return nil
 }
@@ -192,7 +192,7 @@ func (m *Model) PokemonByName(ctx context.Context, name string) (*Pokemon, error
 }
 
 func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (string, error) {
-	if m.language == nil {
+	if m.Language == nil {
 		return "", ErrUnsetLanguage
 	}
 
@@ -202,12 +202,12 @@ func (m *Model) localizedPokemonName(ctx context.Context, pokemon *Pokemon) (str
 		SELECT name
 		FROM pokemon_v2_pokemonspeciesname
 		WHERE pokemon_species_id = ? AND language_id = ?
-	`, pokemon.SpeciesID, m.language.ID).Scan(&name)
+	`, pokemon.SpeciesID, m.Language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf(
 			"could not find localized name for pokemon %q for language with code %q: %w",
 			pokemon.Name,
-			m.language.ISO639,
+			m.Language.ISO639,
 			err,
 		)
 	}
@@ -230,7 +230,7 @@ func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
 }
 
 func (m *Model) localizedLanguageName(ctx context.Context, lang *Language) (string, error) {
-	if m.language == nil {
+	if m.Language == nil {
 		return "", ErrUnsetLanguage
 	}
 
@@ -240,7 +240,7 @@ func (m *Model) localizedLanguageName(ctx context.Context, lang *Language) (stri
 		SELECT name
 		FROM pokemon_v2_languagename
 		WHERE language_id = ? AND local_language_id = ?
-	`, lang.ID, m.language.ID).Scan(&name)
+	`, lang.ID, m.Language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf("error while getting localized name for language with code %q: %w", lang.ISO639, err)
 	}
@@ -410,7 +410,7 @@ func (m *Model) damageClassByID(ctx context.Context, ID int) (*DamageClass, erro
 }
 
 func (m *Model) localizedMoveName(ctx context.Context, move *Move) (string, error) {
-	if m.language == nil {
+	if m.Language == nil {
 		return "", ErrUnsetLanguage
 	}
 
@@ -420,12 +420,12 @@ func (m *Model) localizedMoveName(ctx context.Context, move *Move) (string, erro
 		SELECT name
 		FROM pokemon_v2_movename
 		WHERE move_id = ? AND language_id = ?
-	`, move.ID, m.language.ID).Scan(&name)
+	`, move.ID, m.Language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf(
 			"could not find localized name for move %q for language with code %q: %w",
 			move.Name,
-			m.language.ISO639,
+			m.Language.ISO639,
 			err,
 		)
 	}
@@ -434,7 +434,7 @@ func (m *Model) localizedMoveName(ctx context.Context, move *Move) (string, erro
 }
 
 func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (string, error) {
-	if m.language == nil {
+	if m.Language == nil {
 		return "", ErrUnsetLanguage
 	}
 
@@ -444,12 +444,12 @@ func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (s
 		SELECT name
 		FROM pokemon_v2_generationname
 		WHERE generation_id = ? AND language_id = ?
-	`, gen.ID, m.language.ID).Scan(&name)
+	`, gen.ID, m.Language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf(
 			"could not find localized name for generation %d for language with code %q: %w",
 			gen.ID,
-			m.language.ISO639,
+			m.Language.ISO639,
 			err,
 		)
 	}
@@ -458,7 +458,7 @@ func (m *Model) localizedGenerationName(ctx context.Context, gen *Generation) (s
 }
 
 func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]*Pokemon, error) {
-	if m.language == nil {
+	if m.Language == nil {
 		return nil, ErrUnsetLanguage
 	}
 	if m.Generation == nil {
@@ -479,7 +479,7 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 		GROUP BY p.pokemon_species_id
 		ORDER BY n.name ASC
 		LIMIT ?
-	`, pattern, m.language.ID, m.Generation.ID, limit)
+	`, pattern, m.Language.ID, m.Generation.ID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting pokemon with prefix: %w", err)
 	}

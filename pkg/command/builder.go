@@ -16,10 +16,10 @@ type commandFunc func(*Builder, context.Context) (Command, error)
 type Builder struct {
 	Model *model.Model
 
-	config     config.Config
-	funcs      []commandFunc
-	emojis     map[string]*discordgo.Emoji
-	fieldLimit int
+	config    config.Config
+	funcs     []commandFunc
+	emojis    map[string]*discordgo.Emoji
+	moveLimit int
 }
 
 func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Builder {
@@ -31,8 +31,9 @@ func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Build
 			(*Builder).set,
 			(*Builder).learnset,
 			(*Builder).moves,
+			(*Builder).language,
 		},
-		fieldLimit: 15,
+		moveLimit: 15,
 	}
 }
 
@@ -47,9 +48,10 @@ func (builder *Builder) Close(ctx context.Context) error {
 
 var ErrNoEmoji = errors.New("no matching emoji")
 
-func (builder *Builder) ToEmojiString(name string) (string, error) {
-	if builder.emojis == nil {
-		return "", fmt.Errorf("emojis map not set for builder: %w", ErrNoEmoji)
+func (builder *Builder) ToEmojiString(sess *discordgo.Session, name string) (string, error) {
+	err := builder.checkEmojis(sess)
+	if err != nil {
+		return "", fmt.Errorf("could not get custom emojis: %w", err)
 	}
 
 	emoji1, ok := builder.emojis[name+"1"]
@@ -66,6 +68,72 @@ func (builder *Builder) ToEmojiString(name string) (string, error) {
 }
 
 var ErrCommandFormat = errors.New("invalid command format")
+
+func (builder *Builder) language(ctx context.Context) (Command, error) {
+	type options struct {
+		LocalizationCode *string `option:"language"`
+	}
+
+	langs, err := builder.Model.AllLanguages(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting available language options: %w", err)
+	}
+
+	langChoices := make([]*discordgo.ApplicationCommandOptionChoice, len(langs))
+	for i, lang := range langs {
+		name, err := lang.LocalizedName(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error while localizing language options: %w", err)
+		}
+		langChoices[i] = &discordgo.ApplicationCommandOptionChoice{
+			Name:  name,
+			Value: lang.ISO639,
+		}
+	}
+
+	return command[options]{
+		applicationCommand: &discordgo.ApplicationCommand{
+			Name:        "language",
+			Description: "Set/get the the current Pokedex language.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "language",
+					Description: "Language to set Pokedex to",
+					Required:    false,
+					Choices:     langChoices,
+				},
+			},
+		},
+		handle: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) (*discordgo.InteractionResponseData, error) {
+			if opt.LocalizationCode == nil {
+				name, err := mdl.Language.LocalizedName(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not localize current language name: %w", err)
+				}
+
+				return &discordgo.InteractionResponseData{
+					Content: fmt.Sprintf("Language is currently %q.", name),
+				}, nil
+			} else {
+				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(*opt.LocalizationCode))
+				if err != nil {
+					return nil, fmt.Errorf("error while changing language: %w", err)
+				}
+
+				return &discordgo.InteractionResponseData{
+					Content: "Language successfully changed.",
+				}, nil
+			}
+		},
+	}, nil
+}
 
 func (builder *Builder) set(ctx context.Context) (Command, error) {
 	type options struct {
@@ -179,7 +247,7 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 
 var ErrMissingResourceGuild = errors.New("resource guild not found")
 
-func (builder *Builder) movesToFields(ctx context.Context, pms []model.PokemonMove) ([]*discordgo.MessageEmbedField, error) {
+func (builder *Builder) movesToFields(ctx context.Context, sess *discordgo.Session, pms []model.PokemonMove) ([]*discordgo.MessageEmbedField, error) {
 	fields := make([]*discordgo.MessageEmbedField, len(pms))
 	for i, pm := range pms {
 		values := make([]string, 0, 5)
@@ -199,7 +267,7 @@ func (builder *Builder) movesToFields(ctx context.Context, pms []model.PokemonMo
 			return nil, fmt.Errorf("error while getting type for move %q: %w", move.Name, err)
 		}
 		if !typ.IsUnknown() {
-			typeString, err := builder.ToEmojiString(typ.Name)
+			typeString, err := builder.ToEmojiString(sess, typ.Name)
 			if err != nil {
 				return nil, fmt.Errorf("error while constructing type emoji string for move %q: %w", move.Name, err)
 			}
@@ -210,7 +278,7 @@ func (builder *Builder) movesToFields(ctx context.Context, pms []model.PokemonMo
 		if err != nil {
 			return nil, fmt.Errorf("error while getting damage class for move %q: %w", move.Name, err)
 		}
-		classString, err := builder.ToEmojiString(class.Name)
+		classString, err := builder.ToEmojiString(sess, class.Name)
 		if err != nil {
 			return nil, fmt.Errorf("error while constructing type emoji string for move %q: %w", move.Name, err)
 		}
@@ -397,11 +465,6 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			interaction *discordgo.InteractionCreate,
 			p paginator[options],
 		) (*discordgo.InteractionResponseData, error) {
-			err := builder.checkEmojis(sess)
-			if err != nil {
-				return nil, err
-			}
-
 			pokemon, err := mdl.PokemonByName(ctx, p.Options.PokemonName.Value)
 			if err != nil {
 				if errors.Is(err, model.ErrWrongGeneration) {
@@ -441,7 +504,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
-			fields, err := builder.movesToFields(ctx, pms)
+			fields, err := builder.movesToFields(ctx, sess, pms)
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
 			}
@@ -482,7 +545,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
 		},
-		limit: &builder.fieldLimit,
+		limit: &builder.moveLimit,
 	}, nil
 }
 
@@ -501,6 +564,7 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 
 	minLevel := 1.
 	maxLevel := 100.
+	numMoves := 4
 
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
@@ -531,11 +595,6 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 			interaction *discordgo.InteractionCreate,
 			p paginator[options],
 		) (*discordgo.InteractionResponseData, error) {
-			err := builder.checkEmojis(sess)
-			if err != nil {
-				return nil, err
-			}
-
 			pokemon, err := mdl.PokemonByName(ctx, p.Options.PokemonName.Value)
 			if err != nil {
 				if errors.Is(err, model.ErrWrongGeneration) {
@@ -562,12 +621,11 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
-			top := 4
-			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, &p.Options.Level, &top, p.Page.Limit, p.Page.Offset)
+			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, &p.Options.Level, &numMoves, p.Page.Limit, p.Page.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}
-			fields, err := builder.movesToFields(ctx, pms)
+			fields, err := builder.movesToFields(ctx, sess, pms)
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
 			}
@@ -606,7 +664,7 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
 		},
-		limit: &builder.fieldLimit,
+		limit: &builder.moveLimit,
 	}, nil
 }
 
