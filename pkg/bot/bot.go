@@ -52,41 +52,28 @@ func (bot *Bot) Close() {
 	}
 }
 
-func (bot *Bot) addGuild(ctx context.Context, guild *discordgo.Guild) error {
+func (bot *Bot) addModel(ctx context.Context, ID string, locale discordgo.Locale) (*model.Model, error) {
 	mdl, err := model.New(ctx, bot.config.DB.Path)
 	if err != nil {
-		return fmt.Errorf("error while instantiating model for guild %q: %w", guild.Name, err)
+		return nil, fmt.Errorf("error while instantiating model: %w", err)
 	}
-	bot.models[guild.ID] = mdl
+	bot.models[ID] = mdl
 
-	err = mdl.SetLanguageByLocale(ctx, discordgo.Locale(guild.PreferredLocale))
+	err = mdl.SetLanguageByLocale(ctx, locale)
 	if err != nil {
-		return fmt.Errorf("error while setting language: %w", err)
+		return nil, fmt.Errorf("error while setting language: %w", err)
 	}
 
 	gen, err := mdl.LatestGeneration(ctx)
 	if err != nil {
-		return fmt.Errorf("error while getting default generation: %w", err)
+		return nil, fmt.Errorf("error while getting default generation: %w", err)
 	}
 	mdl.Generation = gen
 
-	return nil
-}
-
-func (bot *Bot) removeGuild(guild *discordgo.Guild) {
-	delete(bot.models, guild.ID)
+	return mdl, nil
 }
 
 var ErrNoMatchingModel = errors.New("no matching model")
-
-func (bot *Bot) model(guild *discordgo.Guild) (*model.Model, error) {
-	model, ok := bot.models[guild.ID]
-	if !ok {
-		return nil, fmt.Errorf("could not find model for guild %q: %w", guild.Name, ErrNoMatchingModel)
-	}
-
-	return model, nil
-}
 
 func (bot *Bot) initialize(ctx context.Context) error {
 	err := bot.session.Open()
@@ -95,15 +82,9 @@ func (bot *Bot) initialize(ctx context.Context) error {
 	}
 
 	bot.session.AddHandler(func(_ *discordgo.Session, create *discordgo.GuildCreate) {
-		err := bot.addGuild(ctx, create.Guild)
+		_, err := bot.addModel(ctx, create.Guild.ID, discordgo.Locale(create.PreferredLocale))
 		if err != nil {
 			log.Printf("failed to add guild %q: %v", create.Guild.Name, err)
-		}
-	})
-	bot.session.AddHandler(func(_ *discordgo.Session, delete *discordgo.GuildDelete) {
-		bot.removeGuild(delete.Guild)
-		if err != nil {
-			log.Printf("failed to add guild %q: %v", delete.Guild.Name, err)
 		}
 	})
 
@@ -130,14 +111,34 @@ func (bot *Bot) Run(ctx context.Context) error {
 
 func (bot *Bot) registerCommands(ctx context.Context) error {
 	bot.session.AddHandler(func(sess *discordgo.Session, interaction *discordgo.InteractionCreate) {
-		guild, err := sess.State.Guild(interaction.GuildID)
-		if err != nil {
-			log.Printf("could not find guild while handling interaction: %v", err)
-			return
-		}
-		mdl, err := bot.model(guild)
-		if err != nil {
-			log.Printf("no model found for guild while handling interaction: %v", err)
+		var mdl *model.Model
+		switch {
+		case interaction.Member != nil:
+			guild, err := sess.State.Guild(interaction.GuildID)
+			if err != nil {
+				log.Printf("could not find guild while handling interaction: %v", err)
+				return
+			}
+			var ok bool
+			mdl, ok = bot.models[guild.ID]
+			if !ok {
+				log.Printf("no model found for guild %q while handling interaction: %v", guild.Name, ErrNoMatchingModel)
+				return
+			}
+		case interaction.User != nil:
+			user := interaction.User
+			var ok bool
+			mdl, ok = bot.models[user.ID]
+			if !ok {
+				var err error
+				mdl, err = bot.addModel(ctx, user.ID, discordgo.Locale(user.Locale))
+				if err != nil {
+					log.Printf("failed to create model for user %q: %v", user.Username, err)
+					return
+				}
+			}
+		default:
+			log.Printf("failed to find user associated with interaction")
 			return
 		}
 
@@ -152,14 +153,14 @@ func (bot *Bot) registerCommands(ctx context.Context) error {
 
 			switch interaction.Type {
 			case discordgo.InteractionApplicationCommand:
-				log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
-				err = cmd.Handle(ctx, mdl, sess, interaction)
+				log.Printf("Handling command %q.", cmd.Name())
+				err := cmd.Handle(ctx, mdl, sess, interaction)
 				if err != nil {
 					log.Printf("error while executing command %q: %v", cmd.Name(), err)
 				}
 				return
 			case discordgo.InteractionApplicationCommandAutocomplete:
-				err = cmd.Autocomplete(ctx, mdl, sess, interaction)
+				err := cmd.Autocomplete(ctx, mdl, sess, interaction)
 				if err != nil {
 					log.Printf("error while generating autocompletions for command %q: %v", cmd.Name(), err)
 				}
@@ -178,7 +179,7 @@ func (bot *Bot) registerCommands(ctx context.Context) error {
 					return
 				}
 
-				err = cmd.Button(ctx, mdl, sess, interaction)
+				err := cmd.Button(ctx, mdl, sess, interaction)
 				if err != nil {
 					log.Printf("error while handling button press for command %q: %v", cmd.Name(), err)
 				}

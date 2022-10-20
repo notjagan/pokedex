@@ -63,7 +63,10 @@ func (m *Model) SetLanguageByLocalizationCode(ctx context.Context, code Localiza
 func (m *Model) SetLanguageByLocale(ctx context.Context, locale discordgo.Locale) error {
 	code, err := LocaleToLocalizationCode(locale)
 	if err != nil {
-		return fmt.Errorf("error while decoding preferred locale: %w", err)
+		code, err = LocaleToLocalizationCode(discordgo.EnglishUS)
+		if err != nil {
+			return fmt.Errorf("error while decoding preferred locale: error while decoding default locale: %w", err)
+		}
 	}
 
 	return m.SetLanguageByLocalizationCode(ctx, code)
