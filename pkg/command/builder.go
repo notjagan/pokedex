@@ -352,13 +352,11 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 	type options struct {
 		PokemonName discordField[string] `option:"pokemon"`
 		MaxLevel    *int                 `option:"max_level"`
+		EggMoves    *bool                `option:"egg_moves"`
 	}
 
-	defaultMethods, err := builder.Model.LearnMethodsByName(ctx, []model.LearnMethodName{
+	defaultMethodNames := []model.LearnMethodName{
 		model.LevelUp,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error while getting default learn methods: %w", err)
 	}
 
 	minLevel := 1.
@@ -383,6 +381,12 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 					Required:    false,
 					MinValue:    &minLevel,
 					MaxValue:    maxLevel,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionBoolean,
+					Name:        "egg_moves",
+					Description: "Include egg moves",
+					Required:    false,
 				},
 			},
 		},
@@ -424,7 +428,16 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not get localized name for generation %d: %w", mdl.Generation.ID, err)
 			}
 
-			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, defaultMethods, p.Options.MaxLevel, nil, p.Page.Limit, p.Page.Offset)
+			methodNames := defaultMethodNames[:]
+			if p.Options.EggMoves != nil && *p.Options.EggMoves {
+				methodNames = append(methodNames, model.Egg)
+			}
+			methods, err := mdl.LearnMethodsByName(ctx, methodNames)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get learn methods: %w", err)
+			}
+
+			pms, hasNext, err := pokemon.SearchPokemonMoves(ctx, methods, p.Options.MaxLevel, nil, p.Page.Limit, p.Page.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("could not get moves for pokemon %q: %w", pokemon.Name, err)
 			}

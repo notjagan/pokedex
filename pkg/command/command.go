@@ -52,7 +52,7 @@ func (paginator[T]) ActionName() byte {
 }
 
 func customID(b buttonState) (string, error) {
-	data, err := Marshal(b)
+	data, err := marshal(b)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal button data: %w", err)
 	}
@@ -135,7 +135,7 @@ func (cmd command[T]) Button(
 
 	switch action {
 	case paginator[T]{}.ActionName():
-		p, err := Unmarshal[paginator[T]](id)
+		p, err := unmarshal[paginator[T]](id)
 		if err != nil {
 			return fmt.Errorf("error while deserializing pagination data: %w", err)
 		}
@@ -361,7 +361,7 @@ func (e *encoder) encode(structure any) error {
 	return nil
 }
 
-func Marshal(structure any) (string, error) {
+func marshal(structure any) (string, error) {
 	var buf bytes.Buffer
 	enc := encoder{&buf}
 	err := enc.encode(structure)
@@ -453,7 +453,7 @@ func (d *decoder) decode(pointer any) error {
 	return d.decodeValue(value.Elem())
 }
 
-func Unmarshal[T any](data string) (*T, error) {
+func unmarshal[T any](data string) (*T, error) {
 	var structure T
 	dec := decoder{
 		Reader: bytes.NewBuffer([]byte(data)),
