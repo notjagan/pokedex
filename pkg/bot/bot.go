@@ -15,7 +15,7 @@ import (
 type Bot struct {
 	config   config.Config
 	session  *discordgo.Session
-	commands []command.Command
+	commands map[string]command.Command
 	models   map[string]*model.Model
 }
 
@@ -128,56 +128,61 @@ func (bot *Bot) Run(ctx context.Context) error {
 	return nil
 }
 
-func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
-	_, err := bot.session.ApplicationCommandCreate(bot.session.State.User.ID, "", cmd.ApplicationCommand())
-	if err != nil {
-		return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
-	}
+func (bot *Bot) registerCommands(ctx context.Context) error {
 	bot.session.AddHandler(func(sess *discordgo.Session, interaction *discordgo.InteractionCreate) {
 		guild, err := sess.State.Guild(interaction.GuildID)
 		if err != nil {
-			log.Printf("could not find guild while executing command %q: %v", cmd.Name(), err)
+			log.Printf("could not find guild while handling interaction: %v", err)
 			return
 		}
 		mdl, err := bot.model(guild)
 		if err != nil {
-			log.Printf("no model found for guild while executing command %q: %v", cmd.Name(), err)
+			log.Printf("no model found for guild while handling interaction: %v", err)
 			return
 		}
 
 		switch interaction.Type {
 		case discordgo.InteractionApplicationCommand, discordgo.InteractionApplicationCommandAutocomplete:
 			data := interaction.ApplicationCommandData()
-			if data.Name == cmd.Name() {
-				switch interaction.Type {
-				case discordgo.InteractionApplicationCommand:
-					log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
-					err = cmd.Handle(ctx, mdl, sess, interaction)
-					if err != nil {
-						log.Printf("error while executing command %q: %v", cmd.Name(), err)
-					}
-					return
-				case discordgo.InteractionApplicationCommandAutocomplete:
-					err = cmd.Autocomplete(ctx, mdl, sess, interaction)
-					if err != nil {
-						log.Printf("error while generating autocompletions for command %q: %v", cmd.Name(), err)
-					}
-					return
-				default:
-					log.Printf("unrecognized interaction type %s for command %q", interaction.Type.String(), cmd.Name())
+			cmd, ok := bot.commands[data.Name]
+			if !ok {
+				log.Printf("unrecognized command %q", data.Name)
+				return
+			}
+
+			switch interaction.Type {
+			case discordgo.InteractionApplicationCommand:
+				log.Printf("COMMAND %q in GUILD %q", cmd.Name(), guild.Name)
+				err = cmd.Handle(ctx, mdl, sess, interaction)
+				if err != nil {
+					log.Printf("error while executing command %q: %v", cmd.Name(), err)
 				}
+				return
+			case discordgo.InteractionApplicationCommandAutocomplete:
+				err = cmd.Autocomplete(ctx, mdl, sess, interaction)
+				if err != nil {
+					log.Printf("error while generating autocompletions for command %q: %v", cmd.Name(), err)
+				}
+				return
+			default:
+				log.Printf("unrecognized interaction type %s for command %q", interaction.Type.String(), cmd.Name())
 			}
 		case discordgo.InteractionMessageComponent:
 			data := interaction.MessageComponentData()
 			switch data.ComponentType {
 			case discordgo.ButtonComponent:
-				if interaction.Message.Interaction.Name == cmd.Name() {
-					err = cmd.Button(ctx, mdl, sess, interaction)
-					if err != nil {
-						log.Printf("error while handling button press for command %q: %v", cmd.Name(), err)
-					}
+				name := interaction.Message.Interaction.Name
+				cmd, ok := bot.commands[name]
+				if !ok {
+					log.Printf("unrecognized command %q", name)
 					return
 				}
+
+				err = cmd.Button(ctx, mdl, sess, interaction)
+				if err != nil {
+					log.Printf("error while handling button press for command %q: %v", cmd.Name(), err)
+				}
+				return
 			default:
 				log.Println("unrecognized component type for message interaction")
 			}
@@ -186,14 +191,10 @@ func (bot *Bot) register(ctx context.Context, cmd command.Command) error {
 		}
 	})
 
-	return nil
-}
-
-func (bot *Bot) registerCommands(ctx context.Context) error {
 	for _, cmd := range bot.commands {
-		err := bot.register(ctx, cmd)
+		_, err := bot.session.ApplicationCommandCreate(bot.session.State.User.ID, "", cmd.ApplicationCommand())
 		if err != nil {
-			return fmt.Errorf("failed to register command %q: %w", cmd.Name(), err)
+			return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
 		}
 	}
 

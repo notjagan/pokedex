@@ -438,7 +438,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				Fields: fields,
 			}
 			if p.Options.MaxLevel != nil {
-				embed.Description = fmt.Sprintf("Max Level %d", *p.Options.MaxLevel)
+				embed.Description = fmt.Sprintf("Max Lv. %d", *p.Options.MaxLevel)
 			}
 
 			buttons, err := p.moveButtons(hasNext)
@@ -597,21 +597,21 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 	}, nil
 }
 
-func (builder *Builder) all(ctx context.Context) ([]Command, error) {
-	commands := make([]Command, len(builder.funcs))
+func (builder *Builder) all(ctx context.Context) (map[string]Command, error) {
+	commands := make(map[string]Command, len(builder.funcs))
 
-	for i, f := range builder.funcs {
+	for _, f := range builder.funcs {
 		cmd, err := f(builder, ctx)
 		if err != nil {
 			return nil, fmt.Errorf("error while creating command: %w", err)
 		}
-		commands[i] = cmd
+		commands[cmd.Name()] = cmd
 	}
 
 	return commands, nil
 }
 
-func All(ctx context.Context, cfg config.Config) ([]Command, error) {
+func All(ctx context.Context, cfg config.Config) (map[string]Command, error) {
 	mdl, err := model.New(ctx, cfg.DB.Path)
 	if err != nil {
 		return nil, fmt.Errorf("error while creating model for command builder: %w", err)
