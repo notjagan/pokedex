@@ -92,6 +92,11 @@ func (bot *Bot) initialize(ctx context.Context) error {
 		return fmt.Errorf("error while registering commands: %w", err)
 	}
 
+	err = bot.unregisterRemovedCommands(ctx)
+	if err != nil {
+		return fmt.Errorf("error while unregistering removed commands: %w", err)
+	}
+
 	return nil
 }
 
@@ -191,10 +196,35 @@ func (bot *Bot) registerCommands(ctx context.Context) error {
 		}
 	})
 
+	cmds := make([]*discordgo.ApplicationCommand, len(bot.commands))
+	i := 0
 	for _, cmd := range bot.commands {
-		_, err := bot.session.ApplicationCommandCreate(bot.session.State.User.ID, "", cmd.ApplicationCommand())
-		if err != nil {
-			return fmt.Errorf("failed to create command %q: %w", cmd.Name(), err)
+		cmds[i] = cmd.ApplicationCommand()
+		i++
+	}
+
+	_, err := bot.session.ApplicationCommandBulkOverwrite(bot.session.State.User.ID, "", cmds)
+	if err != nil {
+		return fmt.Errorf("failed to create commands: %w", err)
+	}
+
+	return nil
+}
+
+func (bot *Bot) unregisterRemovedCommands(ctx context.Context) error {
+	appID := bot.session.State.User.ID
+
+	cmds, err := bot.session.ApplicationCommands(appID, "")
+	if err != nil {
+		return fmt.Errorf("failed to get registered commands: %w", err)
+	}
+
+	for _, cmd := range cmds {
+		if _, ok := bot.commands[cmd.Name]; !ok {
+			err := bot.session.ApplicationCommandDelete(appID, "", cmd.ID)
+			if err != nil {
+				return fmt.Errorf("failed to delete command %q: %w", cmd.Name, err)
+			}
 		}
 	}
 
