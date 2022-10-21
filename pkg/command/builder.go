@@ -29,10 +29,10 @@ func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Build
 		Model:  mdl,
 		config: cfg,
 		funcs: []commandFunc{
-			(*Builder).set,
+			(*Builder).language,
+			(*Builder).version,
 			(*Builder).learnset,
 			(*Builder).moves,
-			(*Builder).language,
 		},
 		moveLimit:         15,
 		autocompleteLimit: 25,
@@ -96,7 +96,7 @@ func (builder *Builder) language(ctx context.Context) (Command, error) {
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
 			Name:        "language",
-			Description: "Set/get the the current Pokedex language.",
+			Description: "Get/set the the current Pokedex language.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
@@ -137,65 +137,22 @@ func (builder *Builder) language(ctx context.Context) (Command, error) {
 	}, nil
 }
 
-func (builder *Builder) set(ctx context.Context) (Command, error) {
+func (builder *Builder) version(ctx context.Context) (Command, error) {
 	type options struct {
-		Language *struct {
-			LocalizationCode string `option:"language"`
-		} `option:"language"`
-		Version *struct {
-			Name discordField[string] `option:"version"`
-		} `option:"version"`
-	}
-
-	langs, err := builder.Model.AllLanguages(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting available language options: %w", err)
-	}
-
-	langChoices := make([]*discordgo.ApplicationCommandOptionChoice, len(langs))
-	for i, lang := range langs {
-		name, err := lang.LocalizedName(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error while localizing language options: %w", err)
-		}
-		langChoices[i] = &discordgo.ApplicationCommandOptionChoice{
-			Name:  name,
-			Value: lang.ISO639,
-		}
+		Name *discordField[string] `option:"version"`
 	}
 
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
-			Name:        "set",
-			Description: "Set a server-wide configuration value for the Pokedex.",
+			Name:        "version",
+			Description: "Get/set the current Pokedex game version.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "version",
-					Description: "Set Pokemon version",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:         discordgo.ApplicationCommandOptionString,
-							Name:         "version",
-							Description:  "Game version to pull data from",
-							Required:     true,
-							Autocomplete: true,
-						},
-					},
-				},
-				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "language",
-					Description: "Set language for data",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "language",
-							Description: "Language to use",
-							Required:    true,
-							Choices:     langChoices,
-						},
-					},
+					Type:         discordgo.ApplicationCommandOptionString,
+					Name:         "version",
+					Description:  "Game version to pull data from",
+					Required:     false,
+					Autocomplete: true,
 				},
 			},
 		},
@@ -206,19 +163,17 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 			interaction *discordgo.InteractionCreate,
 			opt *options,
 		) (*discordgo.InteractionResponseData, error) {
-			switch {
-			case opt.Language != nil:
-				err := mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCode(opt.Language.LocalizationCode))
+			if opt.Name == nil {
+				name, err := mdl.Version.LocalizedName(ctx)
 				if err != nil {
-					return nil, fmt.Errorf("error while changing language: %w", err)
+					return nil, fmt.Errorf("could not localize current version name: %w", err)
 				}
 
 				return &discordgo.InteractionResponseData{
-					Content: "Language successfully changed.",
+					Content: fmt.Sprintf("Currently using Pokemon %s.", name),
 				}, nil
-
-			case opt.Version != nil:
-				err := mdl.SetVersionByName(ctx, opt.Version.Name.Value)
+			} else {
+				err := mdl.SetVersionByName(ctx, opt.Name.Value)
 				if err != nil {
 					return nil, fmt.Errorf("error while changing version: %w", err)
 				}
@@ -226,9 +181,6 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 				return &discordgo.InteractionResponseData{
 					Content: "Version successfully changed.",
 				}, nil
-
-			default:
-				return nil, fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
 			}
 		},
 		autocomplete: func(
@@ -239,10 +191,10 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 			opt *options,
 		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
 			switch {
-			case opt.Version.Name.Focused:
+			case opt.Name != nil && opt.Name.Focused:
 				s := versionSearcher{
 					model:  mdl,
-					prefix: opt.Version.Name.Value,
+					prefix: opt.Name.Value,
 					limit:  builder.autocompleteLimit,
 				}
 				return searchChoices[*model.Version](ctx, s)
