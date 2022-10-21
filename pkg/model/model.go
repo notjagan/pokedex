@@ -502,6 +502,34 @@ func (m *Model) localizedVersionName(ctx context.Context, ver *Version) (string,
 	return name, nil
 }
 
+func (m *Model) SearchVersions(ctx context.Context, prefix string, limit int) ([]*Version, error) {
+	if m.Language == nil {
+		return nil, ErrUnsetLanguage
+	}
+
+	pattern := fmt.Sprintf("%s%%", prefix)
+	var vers []*Version
+	err := m.db.SelectContext(ctx, &vers,
+		/* sql */ `
+		SELECT v.id, v.version_group_id, v.name
+		FROM pokemon_v2_version v
+		JOIN pokemon_v2_versionname n
+			ON v.id = n.version_id
+		WHERE n.name LIKE ? AND n.language_id = ?
+		ORDER BY n.name asc
+		LIMIT ?
+	`, pattern, m.Language.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting versions with prefix: %w", err)
+	}
+
+	for i := range vers {
+		vers[i].model = m
+	}
+
+	return vers, nil
+}
+
 func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]*Pokemon, error) {
 	if m.Language == nil {
 		return nil, ErrUnsetLanguage

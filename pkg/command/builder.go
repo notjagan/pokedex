@@ -143,7 +143,7 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 			LocalizationCode string `option:"language"`
 		} `option:"language"`
 		Version *struct {
-			Name string `option:"version"`
+			Name discordField[string] `option:"version"`
 		} `option:"version"`
 	}
 
@@ -175,10 +175,11 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 					Description: "Set Pokemon version",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
-							Type:        discordgo.ApplicationCommandOptionString,
-							Name:        "version",
-							Description: "Game version to pull data from",
-							Required:    true,
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "version",
+							Description:  "Game version to pull data from",
+							Required:     true,
+							Autocomplete: true,
 						},
 					},
 				},
@@ -217,7 +218,7 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 				}, nil
 
 			case opt.Version != nil:
-				err := mdl.SetVersionByName(ctx, opt.Version.Name)
+				err := mdl.SetVersionByName(ctx, opt.Version.Name.Value)
 				if err != nil {
 					return nil, fmt.Errorf("error while changing version: %w", err)
 				}
@@ -228,6 +229,25 @@ func (builder *Builder) set(ctx context.Context) (Command, error) {
 
 			default:
 				return nil, fmt.Errorf("missing subcommand: %w", ErrCommandFormat)
+			}
+		},
+		autocomplete: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+			switch {
+			case opt.Version.Name.Focused:
+				s := versionSearcher{
+					model:  mdl,
+					prefix: opt.Version.Name.Value,
+					limit:  builder.autocompleteLimit,
+				}
+				return searchChoices[*model.Version](ctx, s)
+			default:
+				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
 		},
 	}, nil
@@ -291,8 +311,8 @@ func (builder *Builder) movesToFields(ctx context.Context, sess *discordgo.Sessi
 	return fields, nil
 }
 
-func searchChoices[T model.Localizer](ctx context.Context, searcher Searcher[T]) ([]*discordgo.ApplicationCommandOptionChoice, error) {
-	results, err := searcher.Search(ctx)
+func searchChoices[T model.Localizer](ctx context.Context, s searcher[T]) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+	results, err := s.Search(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error while searching for matching pokemon: %w", err)
 	}
@@ -306,7 +326,7 @@ func searchChoices[T model.Localizer](ctx context.Context, searcher Searcher[T])
 
 		choices[i] = &discordgo.ApplicationCommandOptionChoice{
 			Name:  name,
-			Value: searcher.Value(res),
+			Value: s.Value(res),
 		}
 	}
 
@@ -532,12 +552,12 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
 			switch {
 			case opt.PokemonName.Focused:
-				searcher := PokemonSearcher{
+				s := pokemonSearcher{
 					model:  mdl,
 					prefix: opt.PokemonName.Value,
 					limit:  builder.autocompleteLimit,
 				}
-				return searchChoices[*model.Pokemon](ctx, searcher)
+				return searchChoices[*model.Pokemon](ctx, s)
 			default:
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
@@ -660,12 +680,12 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
 			switch {
 			case opt.PokemonName.Focused:
-				searcher := PokemonSearcher{
+				s := pokemonSearcher{
 					model:  mdl,
 					prefix: opt.PokemonName.Value,
 					limit:  builder.autocompleteLimit,
 				}
-				return searchChoices[*model.Pokemon](ctx, searcher)
+				return searchChoices[*model.Pokemon](ctx, s)
 			default:
 				return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 			}
