@@ -20,6 +20,26 @@ type Move struct {
 	class *DamageClass
 }
 
+func (move *Move) applyChanges(changes []MoveChange) {
+	for _, change := range changes {
+		if change.Power != nil {
+			move.Power = change.Power
+		}
+
+		if change.PP != nil {
+			move.PP = *change.PP
+		}
+
+		if change.Accuracy != nil {
+			move.Accuracy = change.Accuracy
+		}
+
+		if change.TypeID != nil {
+			move.TypeID = *change.TypeID
+		}
+	}
+}
+
 func (move *Move) Type(ctx context.Context) (*Type, error) {
 	if move.typ == nil {
 		typ, err := move.model.typeByID(ctx, move.TypeID)

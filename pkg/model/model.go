@@ -340,6 +340,26 @@ func (m *Model) searchPokemonMoves(
 	return moves, hasNext, nil
 }
 
+func (m *Model) moveChanges(ctx context.Context, moveID int) ([]MoveChange, error) {
+	var changes []MoveChange
+	err := m.db.SelectContext(ctx, &changes,
+		/* sql */ `
+		SELECT power, pp, accuracy, type_id, version_group_id, move_id
+		FROM pokemon_v2_movechange
+		WHERE move_id = ? AND version_group_id > ?
+		ORDER BY version_group_id DESC
+	`, moveID, m.Version.VersionGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("could not find move changes for move: %w", err)
+	}
+
+	for i := range changes {
+		changes[i].model = m
+	}
+
+	return changes, nil
+}
+
 func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {
 	move := Move{model: m}
 	err := m.db.QueryRowxContext(ctx,
@@ -351,6 +371,13 @@ func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no matching move found: %w", err)
 	}
+
+	changes, err := m.moveChanges(ctx, move.ID)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting move changes: %w", err)
+	}
+
+	move.applyChanges(changes)
 
 	return &move, nil
 }
