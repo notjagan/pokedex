@@ -306,12 +306,10 @@ func (m *Model) searchPokemonMoves(
 	query, args, err := sqlx.In(
 		/* sql */ `
 		SELECT id, level, move_id, move_learn_method_id FROM (
-			SELECT *, rank() OVER (ORDER BY level DESC) AS r FROM (
-				SELECT MIN(id) as id, level, move_id, move_learn_method_id
-				FROM pokemon_v2_pokemonmove
-				WHERE pokemon_id = ? AND version_group_id = ? AND level <= ? AND move_learn_method_id IN (?)
-				GROUP BY move_id
-			)
+			SELECT MIN(id) as id, level, move_id, move_learn_method_id, rank() OVER (ORDER BY level DESC) AS r
+			FROM pokemon_v2_pokemonmove
+			WHERE pokemon_id = ? AND version_group_id = ? AND level <= ? AND move_learn_method_id IN (?)
+			GROUP BY move_id
 		)
 		WHERE ? < 0 OR r <= ?
 		ORDER BY r DESC
