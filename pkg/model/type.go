@@ -32,3 +32,7 @@ func (m *Model) NewTypeCombo() *TypeCombo {
 func (combo *TypeCombo) DefendingEfficacies(ctx context.Context) ([]TypeEfficacy, error) {
 	return combo.model.defendingTypeEfficacies(ctx, combo)
 }
+
+func (typ *Type) AttackingEfficacies(ctx context.Context) ([]TypeEfficacy, error) {
+	return typ.model.attackingTypeEfficacies(ctx, typ)
+}

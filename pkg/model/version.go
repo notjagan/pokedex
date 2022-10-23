@@ -40,3 +40,7 @@ func (ver *Version) LocalizedName(ctx context.Context) (string, error) {
 func (ver *Version) HasPokemon(ctx context.Context, pokemon *Pokemon) (bool, error) {
 	return ver.model.versionHasPokemon(ctx, ver, pokemon)
 }
+
+func (ver *Version) HasMove(ctx context.Context, move *Move) (bool, error) {
+	return ver.model.versionHasMove(ctx, ver, move)
+}

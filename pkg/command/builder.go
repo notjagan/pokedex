@@ -34,6 +34,7 @@ func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Build
 			(*Builder).learnset,
 			(*Builder).moves,
 			(*Builder).weak,
+			(*Builder).coverage,
 		},
 		moveLimit:         15,
 		autocompleteLimit: 25,
@@ -636,9 +637,22 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 	}, nil
 }
 
-func efficaciesToFields(ctx context.Context, effs []model.TypeEfficacy) ([]*discordgo.MessageEmbedField, error) {
+type efficacyNames struct {
+	strong  string
+	neutral string
+	weak    string
+	immune  string
+}
+
+func efficaciesToFields(
+	ctx context.Context,
+	effs []model.TypeEfficacy,
+	includeAll bool,
+	names efficacyNames,
+) ([]*discordgo.MessageEmbedField, error) {
 	n := len(effs)
 	strengths := make([]string, 0, n)
+	neutrals := make([]string, 0, n)
 	weaks := make([]string, 0, n)
 	immunes := make([]string, 0, n)
 
@@ -658,6 +672,7 @@ func efficaciesToFields(ctx context.Context, effs []model.TypeEfficacy) ([]*disc
 		case model.SuperEffective:
 			strengths = append(strengths, name)
 		case model.NormalEffective:
+			neutrals = append(neutrals, name)
 		case model.NotVeryEffective:
 			weaks = append(weaks, name)
 		case model.DoubleNotVeryEffective:
@@ -669,23 +684,54 @@ func efficaciesToFields(ctx context.Context, effs []model.TypeEfficacy) ([]*disc
 		}
 	}
 
-	fields := make([]*discordgo.MessageEmbedField, 0, 3)
+	fields := make([]*discordgo.MessageEmbedField, 0, 4)
 	if len(strengths) > 0 {
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:  "Weaknesses",
+			Name:  names.strong,
 			Value: strings.Join(strengths, ", "),
 		})
-	}
-	if len(weaks) > 0 {
+	} else if includeAll {
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:  "Resistances",
-			Value: strings.Join(weaks, ", "),
+			Name:  names.strong,
+			Value: "_None_",
 		})
 	}
+
+	if includeAll {
+		if len(neutrals) > 0 {
+			fields = append(fields, &discordgo.MessageEmbedField{
+				Name:  names.neutral,
+				Value: strings.Join(neutrals, ", "),
+			})
+		} else {
+			fields = append(fields, &discordgo.MessageEmbedField{
+				Name:  names.neutral,
+				Value: "_None_",
+			})
+		}
+	}
+
+	if len(weaks) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  names.weak,
+			Value: strings.Join(weaks, ", "),
+		})
+	} else if includeAll {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  names.weak,
+			Value: "_None_",
+		})
+	}
+
 	if len(immunes) > 0 {
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:  "Immunities",
+			Name:  names.immune,
 			Value: strings.Join(immunes, ", "),
+		})
+	} else if includeAll {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  names.immune,
+			Value: "_None_",
 		})
 	}
 
@@ -706,12 +752,12 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 	return command[options]{
 		applicationCommand: &discordgo.ApplicationCommand{
 			Name:        "weak",
-			Description: "View type strengths against a defending Pokemon/type combination.",
+			Description: "View type chart against a defending Pokemon/type combination.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "pokemon",
-					Description: "View type strengths against a defending Pokemon",
+					Description: "View type chart against a defending Pokemon",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
 							Type:         discordgo.ApplicationCommandOptionString,
@@ -725,7 +771,7 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "type",
-					Description: "View type strengths against a defending type (combination)",
+					Description: "View type chart against a defending type (combination)",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
 							Type:         discordgo.ApplicationCommandOptionString,
@@ -816,7 +862,11 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 				titleStrings = append(titleStrings, t2)
 			}
 
-			fields, err := efficaciesToFields(ctx, effs)
+			fields, err := efficaciesToFields(ctx, effs, false, efficacyNames{
+				strong: "Weaknesses",
+				weak:   "Resistances",
+				immune: "Immunities",
+			})
 			if err != nil {
 				return nil, fmt.Errorf("could not encode type efficacies: %w", err)
 			}
@@ -856,7 +906,7 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 				case opt.Type.Name2 != nil && opt.Type.Name2.Focused:
 					prefix = opt.Type.Name2.Value
 				default:
-					break
+					return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
 				}
 
 				s := typeSearcher{
@@ -865,6 +915,161 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 					limit:  builder.autocompleteLimit,
 				}
 				return searchChoices[*model.Type](ctx, s)
+			default:
+				return nil, fmt.Errorf("no recognized subcommand in focus: %w", ErrCommandFormat)
+			}
+
+			return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
+		},
+	}, nil
+}
+
+func (builder *Builder) coverage(ctx context.Context) (Command, error) {
+	type options struct {
+		Move *struct {
+			Name discordField[string] `option:"move"`
+		} `option:"move"`
+		Type *struct {
+			Name discordField[string] `option:"type"`
+		} `option:"type"`
+	}
+
+	return command[options]{
+		applicationCommand: &discordgo.ApplicationCommand{
+			Name:        "coverage",
+			Description: "View type chart for an attacking move/type combination.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "move",
+					Description: "View type chart for an attacking move",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "move",
+							Description:  "Name of the move",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "type",
+					Description: "View type chart for an attacking type",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "type",
+							Description:  "Name of the type",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+			},
+		},
+		handle: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) (*discordgo.InteractionResponseData, error) {
+			titleStrings := make([]string, 0, 2)
+			var typ *model.Type
+			switch {
+			case opt.Move != nil:
+				move, err := mdl.MoveByName(ctx, opt.Move.Name.Value)
+				if err != nil {
+					if errors.Is(err, model.ErrWrongGeneration) {
+						return &discordgo.InteractionResponseData{
+							Content: "The specified Pokemon does not exist in this generation.",
+						}, nil
+					} else {
+						return &discordgo.InteractionResponseData{
+							Content: "No Pokemon found with that name.",
+						}, nil
+					}
+				}
+
+				name, err := move.LocalizedName(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not get localized name for move %q: %w", move.Name, err)
+				}
+				titleStrings = append(titleStrings, name)
+
+				typ, err = move.Type(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not get type for move: %w", err)
+				}
+			case opt.Type != nil:
+				var err error
+				typ, err = mdl.TypeByName(ctx, opt.Type.Name.Value)
+				if err != nil {
+					return nil, fmt.Errorf("could not get first type by name: %w", err)
+				}
+			default:
+				return nil, fmt.Errorf("unrecognized subcommand for command \"weak\": %w", ErrCommandFormat)
+			}
+
+			effs, err := typ.AttackingEfficacies(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("error while get efficacies for type combo: %w", err)
+			}
+
+			typeString, err := builder.ToEmojiString(sess, typ.Name)
+			if err != nil {
+				return nil, fmt.Errorf("error while constructing first type emoji string: %w", err)
+			}
+			titleStrings = append(titleStrings, typeString)
+
+			fields, err := efficaciesToFields(ctx, effs, true, efficacyNames{
+				strong:  "Super Effective",
+				neutral: "Neutral",
+				weak:    "Resists",
+				immune:  "Immune",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("could not encode type efficacies: %w", err)
+			}
+
+			return &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{
+					{
+						Title:       strings.Join(titleStrings, " "),
+						Description: "Offensive type chart",
+						Fields:      fields,
+					},
+				},
+			}, nil
+		},
+		autocomplete: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+			switch {
+			case opt.Move != nil:
+				if opt.Move.Name.Focused {
+					s := moveSearcher{
+						model:  mdl,
+						prefix: opt.Move.Name.Value,
+						limit:  builder.autocompleteLimit,
+					}
+					return searchChoices[*model.Move](ctx, s)
+				}
+			case opt.Type != nil:
+				if opt.Type.Name.Focused {
+					s := typeSearcher{
+						model:  mdl,
+						prefix: opt.Type.Name.Value,
+						limit:  builder.autocompleteLimit,
+					}
+					return searchChoices[*model.Type](ctx, s)
+				}
 			default:
 				return nil, fmt.Errorf("no recognized subcommand in focus: %w", ErrCommandFormat)
 			}

@@ -64,3 +64,17 @@ func (s typeSearcher) Search(ctx context.Context) ([]*model.Type, error) {
 func (typeSearcher) Value(typ *model.Type) any {
 	return typ.Name
 }
+
+type moveSearcher struct {
+	model  *model.Model
+	prefix string
+	limit  int
+}
+
+func (s moveSearcher) Search(ctx context.Context) ([]*model.Move, error) {
+	return s.model.SearchMoves(ctx, s.prefix, s.limit)
+}
+
+func (moveSearcher) Value(move *model.Move) any {
+	return move.Name
+}

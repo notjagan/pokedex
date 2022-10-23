@@ -130,12 +130,34 @@ func (m *Model) versionHasPokemon(ctx context.Context, ver *Version, pokemon *Po
 		/* sql */ `
 		SELECT EXISTS (
 			SELECT 1
-			FROM pokemon_v2_pokemonspecies s
-			WHERE s.ID = ? AND s.generation_id <= ?
+			FROM pokemon_v2_pokemonspecies
+			WHERE id = ? AND generation_id <= ?
 		)
 	`, pokemon.SpeciesID, gen.ID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("error while querying pokemon generation: %w", err)
+	}
+
+	return exists, nil
+}
+
+func (m *Model) versionHasMove(ctx context.Context, ver *Version, move *Move) (bool, error) {
+	gen, err := ver.Generation(ctx)
+	if err != nil {
+		return false, fmt.Errorf("error while getting generation for queried version: %w", err)
+	}
+
+	var exists bool
+	err = m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pokemon_v2_move
+			WHERE id = ? AND generation_id <= ?
+		)
+	`, move.ID, gen.ID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("error while querying move generation: %w", err)
 	}
 
 	return exists, nil
@@ -149,6 +171,21 @@ func (m *Model) validatePokemonVersion(ctx context.Context, pokemon *Pokemon) er
 	ok, err := m.Version.HasPokemon(ctx, pokemon)
 	if err != nil {
 		return fmt.Errorf("failed to check if version has pokemon: %w", err)
+	} else if !ok {
+		return ErrWrongGeneration
+	}
+
+	return nil
+}
+
+func (m *Model) validateMoveVersion(ctx context.Context, move *Move) error {
+	if m.Version == nil {
+		return fmt.Errorf("failed to check if version has move: %w", ErrUnsetVersion)
+	}
+
+	ok, err := m.Version.HasMove(ctx, move)
+	if err != nil {
+		return fmt.Errorf("failed to check if version has move: %w", err)
 	} else if !ok {
 		return ErrWrongGeneration
 	}
@@ -370,6 +407,33 @@ func (m *Model) moveByID(ctx context.Context, id int) (*Move, error) {
 	`, id).StructScan(&move)
 	if err != nil {
 		return nil, fmt.Errorf("no matching move found: %w", err)
+	}
+
+	changes, err := m.moveChanges(ctx, move.ID)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting move changes: %w", err)
+	}
+
+	move.applyChanges(changes)
+
+	return &move, nil
+}
+
+func (m *Model) MoveByName(ctx context.Context, name string) (*Move, error) {
+	move := Move{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, power, pp, accuracy, move_damage_class_id, type_id, name
+		FROM pokemon_v2_move
+		WHERE name = ?
+	`, name).StructScan(&move)
+	if err != nil {
+		return nil, fmt.Errorf("no matching move found: %w", err)
+	}
+
+	err = m.validateMoveVersion(ctx, &move)
+	if err != nil {
+		return nil, fmt.Errorf("move not found in version: %w", err)
 	}
 
 	changes, err := m.moveChanges(ctx, move.ID)
@@ -633,6 +697,43 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 	return ps, nil
 }
 
+func (m *Model) SearchMoves(ctx context.Context, prefix string, limit int) ([]*Move, error) {
+	if m.Language == nil {
+		return nil, ErrUnsetLanguage
+	}
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
+	pattern := fmt.Sprintf("%s%%", prefix)
+	var moves []*Move
+	err = m.db.SelectContext(ctx, &moves,
+		/* sql */ `
+		SELECT MIN(m.id) as id, m.power, m.pp, m.accuracy, m.move_damage_class_id, m.type_id, m.name
+		FROM pokemon_v2_move m
+		JOIN pokemon_v2_movename n
+			ON m.id = n.move_id
+		WHERE n.name LIKE ? AND n.language_id = ? AND m.generation_id <= ?
+		GROUP BY n.name
+		ORDER BY n.name ASC
+		LIMIT ?
+	`, pattern, m.Language.ID, gen.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting moves with prefix: %w", err)
+	}
+
+	for i := range moves {
+		moves[i].model = m
+	}
+
+	return moves, nil
+}
+
 func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) ([]TypeEfficacy, error) {
 	if m.Version == nil {
 		return nil, ErrUnsetVersion
@@ -689,6 +790,41 @@ func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) (
 	return effs, nil
 }
 
+func (m *Model) attackingTypeEfficacies(ctx context.Context, typ *Type) ([]TypeEfficacy, error) {
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
+	var effs []TypeEfficacy
+	err = m.db.SelectContext(ctx, &effs,
+		/* sql */ `
+		SELECT damage_factor, target_type_id AS opposing_type_id
+		FROM pokemon_v2_typeefficacy e
+		JOIN pokemon_v2_type tt
+			ON e.damage_type_id = tt.id
+		WHERE damage_type_id = ? AND tt.generation_id <= ?
+		ORDER BY target_type_id
+	`, typ.ID, gen.ID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"could not get type efficacies for type %q: %w",
+			typ.Name,
+			err,
+		)
+	}
+
+	for i := range effs {
+		effs[i].model = m
+	}
+
+	return effs, nil
+}
+
 func (m *Model) SearchTypes(ctx context.Context, prefix string, limit int) ([]*Type, error) {
 	if m.Language == nil {
 		return nil, ErrUnsetLanguage
@@ -732,7 +868,7 @@ func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCo
 		/* sql */ `
 		SELECT FIRST_VALUE(type_id) OVER (
 			PARTITION BY slot
-			ORDER BY id
+			ORDER BY slot ASC
 		) AS id
 		FROM pokemon_v2_pokemontype
 		WHERE pokemon_id = ?
