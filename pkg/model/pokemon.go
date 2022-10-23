@@ -24,3 +24,7 @@ func (pokemon *Pokemon) SearchPokemonMoves(
 ) ([]PokemonMove, bool, error) {
 	return pokemon.model.searchPokemonMoves(ctx, pokemon, methods, maxLevel, top, limit, offset)
 }
+
+func (pokemon *Pokemon) TypeCombo(ctx context.Context) (*TypeCombo, error) {
+	return pokemon.model.pokemonTypeCombo(ctx, pokemon)
+}

@@ -38,3 +38,29 @@ func (s versionSearcher) Search(ctx context.Context) ([]*model.Version, error) {
 func (versionSearcher) Value(ver *model.Version) any {
 	return ver.Name
 }
+
+type languageSearcher struct {
+	model *model.Model
+}
+
+func (s languageSearcher) Search(ctx context.Context) ([]*model.Language, error) {
+	return s.model.AllLanguages(ctx)
+}
+
+func (languageSearcher) Value(lang *model.Language) any {
+	return lang.ISO639
+}
+
+type typeSearcher struct {
+	model  *model.Model
+	prefix string
+	limit  int
+}
+
+func (s typeSearcher) Search(ctx context.Context) ([]*model.Type, error) {
+	return s.model.SearchTypes(ctx, s.prefix, s.limit)
+}
+
+func (typeSearcher) Value(typ *model.Type) any {
+	return typ.Name
+}

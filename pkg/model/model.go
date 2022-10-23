@@ -238,15 +238,15 @@ func (m *Model) AllVersions(ctx context.Context) ([]Version, error) {
 	return vers, nil
 }
 
-func (m *Model) AllLanguages(ctx context.Context) ([]Language, error) {
-	langs := make([]Language, len(AllLocalizationCodes))
+func (m *Model) AllLanguages(ctx context.Context) ([]*Language, error) {
+	langs := make([]*Language, len(AllLocalizationCodes))
 
 	for i, code := range AllLocalizationCodes {
 		lang, err := m.languageByLocalizationCode(ctx, code)
 		if err != nil {
 			return nil, fmt.Errorf("error while getting all languages: %w", err)
 		}
-		langs[i] = *lang
+		langs[i] = lang
 	}
 
 	return langs, nil
@@ -360,14 +360,14 @@ func (m *Model) moveChanges(ctx context.Context, moveID int) ([]MoveChange, erro
 	return changes, nil
 }
 
-func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {
+func (m *Model) moveByID(ctx context.Context, id int) (*Move, error) {
 	move := Move{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
 		SELECT id, power, pp, accuracy, move_damage_class_id, type_id, name
 		FROM pokemon_v2_move
 		WHERE id = ?
-	`, ID).StructScan(&move)
+	`, id).StructScan(&move)
 	if err != nil {
 		return nil, fmt.Errorf("no matching move found: %w", err)
 	}
@@ -382,14 +382,14 @@ func (m *Model) moveByID(ctx context.Context, ID int) (*Move, error) {
 	return &move, nil
 }
 
-func (m *Model) typeByID(ctx context.Context, ID int) (*Type, error) {
+func (m *Model) typeByID(ctx context.Context, id int) (*Type, error) {
 	typ := Type{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
-		SELECT id, name
+		SELECT id, generation_id, name
 		FROM pokemon_v2_type
 		WHERE id = ?
-	`, ID).StructScan(&typ)
+	`, id).StructScan(&typ)
 	if err != nil {
 		return nil, fmt.Errorf("no matching type found: %w", err)
 	}
@@ -397,14 +397,29 @@ func (m *Model) typeByID(ctx context.Context, ID int) (*Type, error) {
 	return &typ, nil
 }
 
-func (m *Model) learnMethodByID(ctx context.Context, ID int) (*LearnMethod, error) {
+func (m *Model) TypeByName(ctx context.Context, name string) (*Type, error) {
+	typ := Type{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, generation_id, name
+		FROM pokemon_v2_type
+		WHERE name = ?
+	`, name).StructScan(&typ)
+	if err != nil {
+		return nil, fmt.Errorf("no matching type found: %w", err)
+	}
+
+	return &typ, nil
+}
+
+func (m *Model) learnMethodByID(ctx context.Context, id int) (*LearnMethod, error) {
 	method := LearnMethod{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
 		SELECT id, name
 		FROM pokemon_v2_movelearnmethod
 		WHERE id = ?
-	`, ID).StructScan(&method)
+	`, id).StructScan(&method)
 	if err != nil {
 		return nil, fmt.Errorf("no matching learn method found: %w", err)
 	}
@@ -527,6 +542,30 @@ func (m *Model) localizedVersionName(ctx context.Context, ver *Version) (string,
 	return name, nil
 }
 
+func (m *Model) localizedTypeName(ctx context.Context, typ *Type) (string, error) {
+	if m.Language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_typename
+		WHERE type_id = ? AND language_id = ?
+	`, typ.ID, m.Language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf(
+			"could not find localized name for type %q for language with code %q: %w",
+			typ.Name,
+			m.Language.ISO639,
+			err,
+		)
+	}
+
+	return name, nil
+}
+
 func (m *Model) SearchVersions(ctx context.Context, prefix string, limit int) ([]*Version, error) {
 	if m.Language == nil {
 		return nil, ErrUnsetLanguage
@@ -592,4 +631,132 @@ func (m *Model) SearchPokemon(ctx context.Context, prefix string, limit int) ([]
 	}
 
 	return ps, nil
+}
+
+func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) ([]TypeEfficacy, error) {
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
+	var effs []TypeEfficacy
+	if combo.Type2 == nil {
+		err = m.db.SelectContext(ctx, &effs,
+			/* sql */ `
+			SELECT damage_factor, damage_type_id AS opposing_type_id
+			FROM pokemon_v2_typeefficacy e
+			JOIN pokemon_v2_type dt
+				ON e.damage_type_id = dt.id
+			WHERE target_type_id = ? AND dt.generation_id <= ?
+			ORDER BY damage_type_id
+		`, combo.Type1.ID, gen.ID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"could not get type efficacies against type %q: %w",
+				combo.Type1.Name,
+				err,
+			)
+		}
+	} else {
+		err = m.db.SelectContext(ctx, &effs,
+			/* sql */ `
+			SELECT e1.damage_factor * e2.damage_factor / 100 AS damage_factor, e1.damage_type_id AS opposing_type_id
+			FROM pokemon_v2_typeefficacy e1
+			JOIN pokemon_v2_typeefficacy e2
+				ON e1.damage_type_id = e2.damage_type_id
+			JOIN pokemon_v2_type dt
+				ON e1.damage_type_id = dt.id
+			WHERE e1.target_type_id = ? AND e2.target_type_id = ? AND dt.generation_id <= ?
+			ORDER BY dt.id
+		`, combo.Type1.ID, combo.Type2.ID, gen.ID)
+		if err != nil {
+			return nil, fmt.Errorf("could not get type efficacies against types %q and %q: %w",
+				combo.Type1.Name,
+				combo.Type2.Name,
+				err,
+			)
+		}
+	}
+
+	for i := range effs {
+		effs[i].model = m
+	}
+
+	return effs, nil
+}
+
+func (m *Model) SearchTypes(ctx context.Context, prefix string, limit int) ([]*Type, error) {
+	if m.Language == nil {
+		return nil, ErrUnsetLanguage
+	}
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
+	pattern := fmt.Sprintf("%s%%", prefix)
+	var types []*Type
+	err = m.db.SelectContext(ctx, &types,
+		/* sql */ `
+		SELECT t.id, t.generation_id, t.name
+		FROM pokemon_v2_type t
+		JOIN pokemon_v2_typename n
+			ON t.id = n.type_id
+		WHERE t.generation_id <= ? AND n.name LIKE ? AND n.language_id = ?
+		LIMIT ?
+	`, gen.ID, pattern, m.Language.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("could not get all types for generation: %w", err)
+	}
+
+	for i := range types {
+		types[i].model = m
+	}
+
+	return types, nil
+}
+
+func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCombo, error) {
+	var ids []struct {
+		ID int `db:"id"`
+	}
+	err := m.db.SelectContext(ctx, &ids,
+		/* sql */ `
+		SELECT FIRST_VALUE(type_id) OVER (
+			PARTITION BY slot
+			ORDER BY id
+		) AS id
+		FROM pokemon_v2_pokemontype
+		WHERE pokemon_id = ?
+	`, pokemon.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get type ids for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	t1, err := m.typeByID(ctx, ids[0].ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get first type for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	var t2 *Type
+	if len(ids) > 1 {
+		t2, err = m.typeByID(ctx, ids[1].ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get second type for pokemon %q: %w", pokemon.Name, err)
+		}
+	}
+
+	return &TypeCombo{
+		model: m,
+		Type1: t1,
+		Type2: t2,
+	}, nil
 }

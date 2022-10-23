@@ -14,7 +14,7 @@ import (
 type commandFunc func(*Builder, context.Context) (Command, error)
 
 type Builder struct {
-	Model *model.Model
+	model *model.Model
 
 	config            config.Config
 	funcs             []commandFunc
@@ -26,13 +26,14 @@ type Builder struct {
 func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Builder {
 	mdl.SetLanguageByLocalizationCode(ctx, model.LocalizationCodeEnglish)
 	return &Builder{
-		Model:  mdl,
+		model:  mdl,
 		config: cfg,
 		funcs: []commandFunc{
 			(*Builder).language,
 			(*Builder).version,
 			(*Builder).learnset,
 			(*Builder).moves,
+			(*Builder).weak,
 		},
 		moveLimit:         15,
 		autocompleteLimit: 25,
@@ -40,7 +41,7 @@ func NewBuilder(ctx context.Context, mdl *model.Model, cfg config.Config) *Build
 }
 
 func (builder *Builder) Close(ctx context.Context) error {
-	err := builder.Model.Close()
+	err := builder.model.Close()
 	if err != nil {
 		return fmt.Errorf("error while closing model for command builder: %w", err)
 	}
@@ -76,21 +77,10 @@ func (builder *Builder) language(ctx context.Context) (Command, error) {
 		LocalizationCode *string `option:"language"`
 	}
 
-	langs, err := builder.Model.AllLanguages(ctx)
+	s := languageSearcher{model: builder.model}
+	langChoices, err := searchChoices[*model.Language](ctx, s)
 	if err != nil {
-		return nil, fmt.Errorf("error while getting available language options: %w", err)
-	}
-
-	langChoices := make([]*discordgo.ApplicationCommandOptionChoice, len(langs))
-	for i, lang := range langs {
-		name, err := lang.LocalizedName(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error while localizing language options: %w", err)
-		}
-		langChoices[i] = &discordgo.ApplicationCommandOptionChoice{
-			Name:  name,
-			Value: lang.ISO639,
-		}
+		return nil, fmt.Errorf("could not get available language choices: %w", err)
 	}
 
 	return command[options]{
@@ -434,7 +424,7 @@ func (builder *Builder) learnset(ctx context.Context) (Command, error) {
 				} else {
 					return &discordgo.InteractionResponseData{
 						Content: "No Pokemon found with that name.",
-					}, fmt.Errorf("error while querying for pokemon with name %q: %w", p.Options.PokemonName.Value, err)
+					}, nil
 				}
 			}
 
@@ -524,7 +514,7 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 		Level       int                  `option:"level"`
 	}
 
-	defaultMethods, err := builder.Model.LearnMethodsByName(ctx, []model.LearnMethodName{
+	defaultMethods, err := builder.model.LearnMethodsByName(ctx, []model.LearnMethodName{
 		model.LevelUp,
 	})
 	if err != nil {
@@ -643,6 +633,244 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 			}
 		},
 		limit: &builder.moveLimit,
+	}, nil
+}
+
+func efficaciesToFields(ctx context.Context, effs []model.TypeEfficacy) ([]*discordgo.MessageEmbedField, error) {
+	n := len(effs)
+	strengths := make([]string, 0, n)
+	weaks := make([]string, 0, n)
+	immunes := make([]string, 0, n)
+
+	for _, te := range effs {
+		typ, err := te.OpposingType(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode type efficacies: %w", err)
+		}
+		name, err := typ.LocalizedName(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode type efficacies: %w", err)
+		}
+
+		switch te.EfficacyLevel() {
+		case model.DoubleSuperEffective:
+			strengths = append(strengths, fmt.Sprintf("**%s**", name))
+		case model.SuperEffective:
+			strengths = append(strengths, name)
+		case model.NormalEffective:
+		case model.NotVeryEffective:
+			weaks = append(weaks, name)
+		case model.DoubleNotVeryEffective:
+			weaks = append(weaks, fmt.Sprintf("**%s**", name))
+		case model.Immune:
+			immunes = append(immunes, name)
+		default:
+			return nil, fmt.Errorf("unexpected type efficacy level: %w", ErrUnrecognizedInteraction)
+		}
+	}
+
+	fields := make([]*discordgo.MessageEmbedField, 0, 3)
+	if len(strengths) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  "Weaknesses",
+			Value: strings.Join(strengths, ", "),
+		})
+	}
+	if len(weaks) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  "Resistances",
+			Value: strings.Join(weaks, ", "),
+		})
+	}
+	if len(immunes) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  "Immunities",
+			Value: strings.Join(immunes, ", "),
+		})
+	}
+
+	return fields, nil
+}
+
+func (builder *Builder) weak(ctx context.Context) (Command, error) {
+	type options struct {
+		Pokemon *struct {
+			Name discordField[string] `option:"pokemon"`
+		} `option:"pokemon"`
+		Type *struct {
+			Name1 discordField[string]  `option:"type_1"`
+			Name2 *discordField[string] `option:"type_2"`
+		} `option:"type"`
+	}
+
+	return command[options]{
+		applicationCommand: &discordgo.ApplicationCommand{
+			Name:        "weak",
+			Description: "View type strengths against a defending Pokemon/type combination.",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "pokemon",
+					Description: "View type strengths against a defending Pokemon",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "pokemon",
+							Description:  "Name of the Pokemon",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "type",
+					Description: "View type strengths against a defending type (combination)",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "type_1",
+							Description:  "Name of the first type",
+							Required:     true,
+							Autocomplete: true,
+						},
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "type_2",
+							Description:  "Name of the second type",
+							Required:     false,
+							Autocomplete: true,
+						},
+					},
+				},
+			},
+		},
+		handle: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) (*discordgo.InteractionResponseData, error) {
+			titleStrings := make([]string, 0, 3)
+			combo := mdl.NewTypeCombo()
+			switch {
+			case opt.Pokemon != nil:
+				pokemon, err := mdl.PokemonByName(ctx, opt.Pokemon.Name.Value)
+				if err != nil {
+					if errors.Is(err, model.ErrWrongGeneration) {
+						return &discordgo.InteractionResponseData{
+							Content: "The specified Pokemon does not exist in this generation.",
+						}, nil
+					} else {
+						return &discordgo.InteractionResponseData{
+							Content: "No Pokemon found with that name.",
+						}, nil
+					}
+				}
+
+				name, err := pokemon.LocalizedName(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not get localized name for pokemon %q: %w", pokemon.Name, err)
+				}
+				titleStrings = append(titleStrings, name)
+
+				combo, err = pokemon.TypeCombo(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not get type combo for pokemon: %w", err)
+				}
+			case opt.Type != nil:
+				typ1, err := mdl.TypeByName(ctx, opt.Type.Name1.Value)
+				if err != nil {
+					return nil, fmt.Errorf("could not get first type by name: %w", err)
+				}
+				combo.Type1 = typ1
+
+				if opt.Type.Name2 != nil {
+					typ2, err := mdl.TypeByName(ctx, opt.Type.Name2.Value)
+					if err != nil {
+						return nil, fmt.Errorf("could not get second type by name: %w", err)
+					}
+					combo.Type2 = typ2
+				}
+			default:
+				return nil, fmt.Errorf("unrecognized subcommand for command \"weak\": %w", ErrCommandFormat)
+			}
+
+			effs, err := combo.DefendingEfficacies(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("error while get efficacies for type combo: %w", err)
+			}
+
+			t1, err := builder.ToEmojiString(sess, combo.Type1.Name)
+			if err != nil {
+				return nil, fmt.Errorf("error while constructing first type emoji string: %w", err)
+			}
+			titleStrings = append(titleStrings, t1)
+
+			if combo.Type2 != nil {
+				t2, err := builder.ToEmojiString(sess, combo.Type2.Name)
+				if err != nil {
+					return nil, fmt.Errorf("error while constructing first type emoji string: %w", err)
+				}
+				titleStrings = append(titleStrings, t2)
+			}
+
+			fields, err := efficaciesToFields(ctx, effs)
+			if err != nil {
+				return nil, fmt.Errorf("could not encode type efficacies: %w", err)
+			}
+
+			return &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{
+					{
+						Title:       strings.Join(titleStrings, " "),
+						Description: "Defensive type chart",
+						Fields:      fields,
+					},
+				},
+			}, nil
+		},
+		autocomplete: func(
+			ctx context.Context,
+			mdl *model.Model,
+			sess *discordgo.Session,
+			interaction *discordgo.InteractionCreate,
+			opt *options,
+		) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+			switch {
+			case opt.Pokemon != nil:
+				if opt.Pokemon.Name.Focused {
+					s := pokemonSearcher{
+						model:  mdl,
+						prefix: opt.Pokemon.Name.Value,
+						limit:  builder.autocompleteLimit,
+					}
+					return searchChoices[*model.Pokemon](ctx, s)
+				}
+			case opt.Type != nil:
+				var prefix string
+				switch {
+				case opt.Type.Name1.Focused:
+					prefix = opt.Type.Name1.Value
+				case opt.Type.Name2 != nil && opt.Type.Name2.Focused:
+					prefix = opt.Type.Name2.Value
+				default:
+					break
+				}
+
+				s := typeSearcher{
+					model:  mdl,
+					prefix: prefix,
+					limit:  builder.autocompleteLimit,
+				}
+				return searchChoices[*model.Type](ctx, s)
+			default:
+				return nil, fmt.Errorf("no recognized subcommand in focus: %w", ErrCommandFormat)
+			}
+
+			return nil, fmt.Errorf("no recognized field in focus: %w", ErrCommandFormat)
+		},
 	}, nil
 }
 
