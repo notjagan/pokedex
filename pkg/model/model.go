@@ -119,6 +119,20 @@ func (m *Model) versionGeneration(ctx context.Context, ver *Version) (*Generatio
 	return &gen, nil
 }
 
+func (m *Model) latestGeneration(ctx context.Context) (*Generation, error) {
+	gen := Generation{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT max(id) as id
+		FROM pokemon_v2_generation
+	`).StructScan(&gen)
+	if err != nil {
+		return nil, fmt.Errorf("could not get latest generation: %w", err)
+	}
+
+	return &gen, nil
+}
+
 func (m *Model) versionHasPokemon(ctx context.Context, ver *Version, pokemon *Pokemon) (bool, error) {
 	gen, err := ver.Generation(ctx)
 	if err != nil {
@@ -861,18 +875,41 @@ func (m *Model) SearchTypes(ctx context.Context, prefix string, limit int) ([]*T
 }
 
 func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCombo, error) {
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	g, err := m.latestGeneration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting latest generation: %w", err)
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
 	var ids []struct {
 		ID int `db:"id"`
 	}
-	err := m.db.SelectContext(ctx, &ids,
+	err = m.db.SelectContext(ctx, &ids,
 		/* sql */ `
-		SELECT FIRST_VALUE(type_id) OVER (
-			PARTITION BY slot
-			ORDER BY slot ASC
-		) AS id
-		FROM pokemon_v2_pokemontype
-		WHERE pokemon_id = ?
-	`, pokemon.ID)
+		SELECT id FROM (
+			SELECT FIRST_VALUE(type_id) OVER (
+				PARTITION BY slot
+				ORDER BY generation_id ASC
+			) AS id, slot
+			FROM (
+				SELECT type_id, pokemon_id, slot, ? AS generation_id
+				FROM pokemon_v2_pokemontype
+				UNION ALL
+				SELECT type_id, pokemon_id, slot, generation_id
+				FROM pokemon_v2_pokemontypepast
+			)
+			WHERE pokemon_id = ? AND generation_id >= ?
+		)
+		GROUP BY slot
+	`, g.ID, pokemon.ID, gen.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get type ids for pokemon %q: %w", pokemon.Name, err)
 	}
