@@ -753,6 +753,11 @@ func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) (
 		return nil, ErrUnsetVersion
 	}
 
+	g, err := m.latestGeneration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting latest generation: %w", err)
+	}
+
 	gen, err := m.Version.Generation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
@@ -762,13 +767,22 @@ func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) (
 	if combo.Type2 == nil {
 		err = m.db.SelectContext(ctx, &effs,
 			/* sql */ `
-			SELECT damage_factor, damage_type_id AS opposing_type_id
-			FROM pokemon_v2_typeefficacy e
+			SELECT DISTINCT damage_type_id AS opposing_type_id, FIRST_VALUE(damage_factor) OVER (
+				PARTITION BY damage_type_id
+				ORDER BY e.generation_id ASC
+			) as damage_factor
+			FROM (
+				SELECT damage_factor, damage_type_id, target_type_id, ? as generation_id
+				FROM pokemon_v2_typeefficacy
+				UNION ALL
+				SELECT damage_factor, damage_type_id, target_type_id, generation_id
+				FROM pokemon_v2_typeefficacypast
+			) e
 			JOIN pokemon_v2_type dt
 				ON e.damage_type_id = dt.id
-			WHERE target_type_id = ? AND dt.generation_id <= ?
+			WHERE target_type_id = ? AND dt.generation_id <= ? AND e.generation_id >= ?
 			ORDER BY damage_type_id
-		`, combo.Type1.ID, gen.ID)
+		`, g.ID, combo.Type1.ID, gen.ID, gen.ID)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"could not get type efficacies against type %q: %w",
@@ -779,15 +793,32 @@ func (m *Model) defendingTypeEfficacies(ctx context.Context, combo *TypeCombo) (
 	} else {
 		err = m.db.SelectContext(ctx, &effs,
 			/* sql */ `
-			SELECT e1.damage_factor * e2.damage_factor / 100 AS damage_factor, e1.damage_type_id AS opposing_type_id
-			FROM pokemon_v2_typeefficacy e1
-			JOIN pokemon_v2_typeefficacy e2
+			WITH e AS (
+				SELECT damage_factor, damage_type_id, target_type_id, ? as generation_id
+				FROM pokemon_v2_typeefficacy
+				UNION ALL
+				SELECT damage_factor, damage_type_id, target_type_id, generation_id
+				FROM pokemon_v2_typeefficacypast
+			)
+			SELECT DISTINCT e1.damage_type_id AS opposing_type_id, FIRST_VALUE(e1.damage_factor) OVER (
+				PARTITION BY e1.damage_type_id
+				ORDER BY e1.generation_id ASC
+			) * FIRST_VALUE(e2.damage_factor) OVER (
+				PARTITION BY e2.damage_type_id
+				ORDER BY e2.generation_id ASC
+			) / 100 as damage_factor
+			FROM e e1
+			JOIN e e2
 				ON e1.damage_type_id = e2.damage_type_id
 			JOIN pokemon_v2_type dt
 				ON e1.damage_type_id = dt.id
-			WHERE e1.target_type_id = ? AND e2.target_type_id = ? AND dt.generation_id <= ?
+			WHERE e1.target_type_id = ?
+				AND e2.target_type_id = ?
+				AND dt.generation_id <= ?
+				AND e1.generation_id >= ?
+				AND e2.generation_id >= ?
 			ORDER BY dt.id
-		`, combo.Type1.ID, combo.Type2.ID, gen.ID)
+		`, g.ID, combo.Type1.ID, combo.Type2.ID, gen.ID, gen.ID, gen.ID)
 		if err != nil {
 			return nil, fmt.Errorf("could not get type efficacies against types %q and %q: %w",
 				combo.Type1.Name,
@@ -911,7 +942,7 @@ func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCo
 		SELECT DISTINCT FIRST_VALUE(type_id) OVER (
 			PARTITION BY slot
 			ORDER BY generation_id ASC
-		) AS id, slot
+		) AS id
 		FROM (
 			SELECT type_id, pokemon_id, slot, ? AS generation_id
 			FROM pokemon_v2_pokemontype
