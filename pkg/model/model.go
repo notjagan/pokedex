@@ -809,6 +809,11 @@ func (m *Model) attackingTypeEfficacies(ctx context.Context, typ *Type) ([]TypeE
 		return nil, ErrUnsetVersion
 	}
 
+	g, err := m.latestGeneration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting latest generation: %w", err)
+	}
+
 	gen, err := m.Version.Generation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
@@ -817,13 +822,22 @@ func (m *Model) attackingTypeEfficacies(ctx context.Context, typ *Type) ([]TypeE
 	var effs []TypeEfficacy
 	err = m.db.SelectContext(ctx, &effs,
 		/* sql */ `
-		SELECT damage_factor, target_type_id AS opposing_type_id
-		FROM pokemon_v2_typeefficacy e
+		SELECT DISTINCT target_type_id AS opposing_type_id, FIRST_VALUE(damage_factor) OVER (
+			PARTITION BY target_type_id
+			ORDER BY e.generation_id ASC
+		) as damage_factor
+		FROM (
+			SELECT damage_factor, damage_type_id, target_type_id, ? as generation_id
+			FROM pokemon_v2_typeefficacy
+			UNION ALL
+			SELECT damage_factor, damage_type_id, target_type_id, generation_id
+			FROM pokemon_v2_typeefficacypast
+		) e
 		JOIN pokemon_v2_type tt
-			ON e.damage_type_id = tt.id
-		WHERE damage_type_id = ? AND tt.generation_id <= ?
+			ON e.target_type_id = tt.id
+		WHERE damage_type_id = ? AND tt.generation_id <= ? AND e.generation_id >= ?
 		ORDER BY target_type_id
-	`, typ.ID, gen.ID)
+	`, g.ID, typ.ID, gen.ID, gen.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"could not get type efficacies for type %q: %w",
@@ -894,21 +908,18 @@ func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCo
 	}
 	err = m.db.SelectContext(ctx, &ids,
 		/* sql */ `
-		SELECT id FROM (
-			SELECT FIRST_VALUE(type_id) OVER (
-				PARTITION BY slot
-				ORDER BY generation_id ASC
-			) AS id, slot
-			FROM (
-				SELECT type_id, pokemon_id, slot, ? AS generation_id
-				FROM pokemon_v2_pokemontype
-				UNION ALL
-				SELECT type_id, pokemon_id, slot, generation_id
-				FROM pokemon_v2_pokemontypepast
-			)
-			WHERE pokemon_id = ? AND generation_id >= ?
+		SELECT DISTINCT FIRST_VALUE(type_id) OVER (
+			PARTITION BY slot
+			ORDER BY generation_id ASC
+		) AS id, slot
+		FROM (
+			SELECT type_id, pokemon_id, slot, ? AS generation_id
+			FROM pokemon_v2_pokemontype
+			UNION ALL
+			SELECT type_id, pokemon_id, slot, generation_id
+			FROM pokemon_v2_pokemontypepast
 		)
-		GROUP BY slot
+		WHERE pokemon_id = ? AND generation_id >= ?
 	`, g.ID, pokemon.ID, gen.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get type ids for pokemon %q: %w", pokemon.Name, err)
