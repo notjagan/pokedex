@@ -243,7 +243,9 @@ func (builder *Builder) movesToFields(ctx context.Context, sess *discordgo.Sessi
 			values = append(values, fmt.Sprintf("%d%%", *move.Accuracy))
 		}
 
-		values = append(values, fmt.Sprintf("%d `PP`", move.PP))
+		if move.PP != nil {
+			values = append(values, fmt.Sprintf("%d `PP`", *move.PP))
+		}
 
 		fields[i] = &discordgo.MessageEmbedField{
 			Name:  fmt.Sprintf("Lv. %-2d ▸ %s", pm.Level, name),

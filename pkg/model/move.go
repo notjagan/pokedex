@@ -10,7 +10,7 @@ type Move struct {
 
 	ID            int    `db:"id"`
 	Power         *int   `db:"power"`
-	PP            int    `db:"pp"`
+	PP            *int   `db:"pp"`
 	Accuracy      *int   `db:"accuracy"`
 	DamageClassID int    `db:"move_damage_class_id"`
 	TypeID        int    `db:"type_id"`
@@ -27,7 +27,7 @@ func (move *Move) applyChanges(changes []MoveChange) {
 		}
 
 		if change.PP != nil {
-			move.PP = *change.PP
+			move.PP = change.PP
 		}
 
 		if change.Accuracy != nil {
