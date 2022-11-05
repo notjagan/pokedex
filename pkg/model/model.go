@@ -2,12 +2,14 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/notjagan/pokedex/pkg/model/sprite"
 )
 
 type Model struct {
@@ -102,35 +104,53 @@ func (m *Model) SetVersionByName(ctx context.Context, name string) error {
 	return nil
 }
 
-var ErrWrongGeneration = errors.New("selected resource does not exist in the current generation")
-
-func (m *Model) versionGeneration(ctx context.Context, ver *Version) (*Generation, error) {
+func (m *Model) GenerationByID(ctx context.Context, id int) (*Generation, error) {
 	gen := Generation{model: m}
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
-		SELECT generation_id as id
-		FROM pokemon_v2_versiongroup
+		SELECT id, name
+		FROM pokemon_v2_generation
 		WHERE id = ?
-	`, ver.VersionGroupID).StructScan(&gen)
+	`, id).StructScan(&gen)
 	if err != nil {
-		return nil, fmt.Errorf("could not find generation for version %q: %w", ver.Name, err)
+		return nil, fmt.Errorf("could not find generation with id %q: %w", id, err)
 	}
 
 	return &gen, nil
 }
 
+func (m *Model) versionGroupByID(ctx context.Context, id int) (*VersionGroup, error) {
+	vg := VersionGroup{model: m}
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT id, generation_id, name
+		FROM pokemon_v2_versiongroup
+		WHERE id = ?
+	`, id).StructScan(&vg)
+	if err != nil {
+		return nil, fmt.Errorf("could not find version group with id %q: %w", id, err)
+	}
+
+	return &vg, nil
+}
+
 func (m *Model) latestGeneration(ctx context.Context) (*Generation, error) {
-	gen := Generation{model: m}
+	var id int
 	err := m.db.QueryRowxContext(ctx,
 		/* sql */ `
 		SELECT max(id) as id
 		FROM pokemon_v2_generation
-	`).StructScan(&gen)
+	`).Scan(&id)
 	if err != nil {
-		return nil, fmt.Errorf("could not get latest generation: %w", err)
+		return nil, fmt.Errorf("could not get latest generation id: %w", err)
 	}
 
-	return &gen, nil
+	gen, err := m.GenerationByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("could not find latest generation: %w", err)
+	}
+
+	return gen, nil
 }
 
 func (m *Model) versionHasPokemon(ctx context.Context, ver *Version, pokemon *Pokemon) (bool, error) {
@@ -176,6 +196,8 @@ func (m *Model) versionHasMove(ctx context.Context, ver *Version, move *Move) (b
 
 	return exists, nil
 }
+
+var ErrWrongGeneration = errors.New("selected resource does not exist in the current generation")
 
 func (m *Model) validatePokemonVersion(ctx context.Context, pokemon *Pokemon) error {
 	if m.Version == nil {
@@ -974,4 +996,54 @@ func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCo
 		Type1: t1,
 		Type2: t2,
 	}, nil
+}
+
+var ErrSpritesNotFound = errors.New("could not find sprites")
+
+func SpritesForVersion(ctx context.Context, ps *sprite.PokemonSprites, ver Version) (*sprite.Sprites, error) {
+	vg, err := ver.VersionGroup(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not get version group version %q: %w", ver.Name, err)
+	}
+
+	gen, err := ver.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not get generation for version %q: %w", ver.Name, err)
+	}
+
+	m, ok := ps.Versions[gen.Name]
+	if !ok {
+		return nil, fmt.Errorf("could not get sprites for generation with id %q: %w", gen.ID, err)
+	}
+
+	sprites, ok := m[vg.Name]
+	if !ok {
+		sprites, ok = m["icons"]
+		if !ok {
+			return nil, fmt.Errorf("could not get sprites for version group %q: %w", vg.Name, ErrSpritesNotFound)
+		}
+	}
+
+	return &sprites, nil
+}
+
+func (m *Model) pokemonSprites(ctx context.Context, pokemon *Pokemon) (*sprite.PokemonSprites, error) {
+	var data string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT sprites
+		FROM pokemon_v2_pokemonsprites
+		WHERE pokemon_id = ?
+	`, pokemon.ID).Scan(&data)
+	if err != nil {
+		return nil, fmt.Errorf("could not find sprites for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	var ps sprite.PokemonSprites
+	err = json.Unmarshal([]byte(data), &ps)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode sprite json data for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	return &ps, nil
 }

@@ -18,19 +18,33 @@ type Version struct {
 	VersionGroupID int    `db:"version_group_id"`
 	Name           string `db:"name"`
 
-	gen *Generation
+	vg *VersionGroup
+}
+
+func (ver *Version) VersionGroup(ctx context.Context) (*VersionGroup, error) {
+	if ver.vg == nil {
+		vg, err := ver.model.versionGroupByID(ctx, ver.VersionGroupID)
+		if err != nil {
+			return nil, fmt.Errorf("error while getting version group for version: %w", err)
+		}
+		ver.vg = vg
+	}
+
+	return ver.vg, nil
 }
 
 func (ver *Version) Generation(ctx context.Context) (*Generation, error) {
-	if ver.gen == nil {
-		g, err := ver.model.versionGeneration(ctx, ver)
-		if err != nil {
-			return nil, fmt.Errorf("error while getting generation for version: %w", err)
-		}
-		ver.gen = g
+	vg, err := ver.VersionGroup(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	return ver.gen, nil
+	gen, err := vg.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting generation for version %q: %w", ver.Name, err)
+	}
+
+	return gen, nil
 }
 
 func (ver *Version) LocalizedName(ctx context.Context) (string, error) {

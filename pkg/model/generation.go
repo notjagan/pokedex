@@ -7,7 +7,8 @@ import (
 type Generation struct {
 	model *Model
 
-	ID int
+	ID   int
+	Name string
 }
 
 func (gen *Generation) LocalizedName(ctx context.Context) (string, error) {
