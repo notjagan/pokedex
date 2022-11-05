@@ -72,7 +72,6 @@ type PokemonMove struct {
 	model *Model
 
 	*Move
-	ID            int `db:"id"`
 	Level         int `db:"level"`
 	MoveID        int `db:"move_id"`
 	LearnMethodID int `db:"move_learn_method_id"`

@@ -378,12 +378,17 @@ func (m *Model) searchPokemonMoves(
 
 	query, args, err := sqlx.In(
 		/* sql */ `
-		SELECT id, level, move_id, move_learn_method_id FROM (
+		SELECT
+			m.id, m.power, m.pp, m.accuracy, m.move_damage_class_id, m.type_id, m.name,
+			p.level, p.move_id, p.move_learn_method_id
+		FROM (
 			SELECT MIN(id) as id, level, move_id, move_learn_method_id, rank() OVER (ORDER BY level DESC) AS r
 			FROM pokemon_v2_pokemonmove
 			WHERE pokemon_id = ? AND version_group_id = ? AND level <= ? AND move_learn_method_id IN (?)
 			GROUP BY move_id
-		)
+		) p
+		JOIN pokemon_v2_move m
+			ON p.move_id = m.id
 		WHERE ? < 0 OR r <= ?
 		ORDER BY r DESC
 		LIMIT ? OFFSET ?
@@ -400,11 +405,7 @@ func (m *Model) searchPokemonMoves(
 
 	for i := range moves {
 		moves[i].model = m
-		move, err := m.moveByID(ctx, moves[i].MoveID)
-		if err != nil {
-			return nil, false, fmt.Errorf("could not get move for pokemon move: %w", err)
-		}
-		moves[i].Move = move
+		moves[i].Move.model = m
 	}
 
 	var hasNext bool
@@ -436,28 +437,6 @@ func (m *Model) moveChanges(ctx context.Context, moveID int) ([]MoveChange, erro
 	}
 
 	return changes, nil
-}
-
-func (m *Model) moveByID(ctx context.Context, id int) (*Move, error) {
-	move := Move{model: m}
-	err := m.db.QueryRowxContext(ctx,
-		/* sql */ `
-		SELECT id, power, pp, accuracy, move_damage_class_id, type_id, name
-		FROM pokemon_v2_move
-		WHERE id = ?
-	`, id).StructScan(&move)
-	if err != nil {
-		return nil, fmt.Errorf("no matching move found: %w", err)
-	}
-
-	changes, err := m.moveChanges(ctx, move.ID)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting move changes: %w", err)
-	}
-
-	move.applyChanges(changes)
-
-	return &move, nil
 }
 
 func (m *Model) MoveByName(ctx context.Context, name string) (*Move, error) {
