@@ -400,6 +400,11 @@ func (m *Model) searchPokemonMoves(
 
 	for i := range moves {
 		moves[i].model = m
+		move, err := m.moveByID(ctx, moves[i].MoveID)
+		if err != nil {
+			return nil, false, fmt.Errorf("could not get move for pokemon move: %w", err)
+		}
+		moves[i].Move = move
 	}
 
 	var hasNext bool
@@ -1046,4 +1051,55 @@ func (m *Model) pokemonSprites(ctx context.Context, pokemon *Pokemon) (*sprite.P
 	}
 
 	return &ps, nil
+}
+
+func (m *Model) pokemonAbilities(ctx context.Context, pokemon *Pokemon) ([]PokemonAbility, error) {
+	if m.Version == nil {
+		return nil, ErrUnsetVersion
+	}
+
+	gen, err := m.Version.Generation(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
+	}
+
+	var abilities []PokemonAbility
+	err = m.db.SelectContext(ctx, &abilities,
+		/* sql */ `
+		SELECT a.id, a.is_main_series, a.generation_id, a.name, p.is_hidden, p.ability_id
+		FROM pokemon_v2_pokemonability p
+		JOIN pokemon_v2_ability a
+			ON p.ability_id = a.id
+		WHERE p.pokemon_id = ? AND a.generation_id <= ?
+		ORDER BY p.slot ASC
+	`, pokemon.ID, gen.ID)
+	if err != nil {
+		return nil, fmt.Errorf("could not get abilities for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	for i := range abilities {
+		abilities[i].model = m
+		abilities[i].Ability.model = m
+	}
+
+	return abilities, nil
+}
+
+func (m *Model) abilityLocalizedName(ctx context.Context, ability *Ability) (string, error) {
+	if m.Language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_abilityname
+		WHERE ability_id = ? AND language_id = ?
+	`, ability.ID, m.Language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("could not find localized name for ability %q: %w", ability.Name, err)
+	}
+
+	return name, nil
 }

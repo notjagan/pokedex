@@ -67,3 +67,27 @@ func (move *Move) DamageClass(ctx context.Context) (*DamageClass, error) {
 func (move *Move) LocalizedName(ctx context.Context) (string, error) {
 	return move.model.localizedMoveName(ctx, move)
 }
+
+type PokemonMove struct {
+	model *Model
+
+	*Move
+	ID            int `db:"id"`
+	Level         int `db:"level"`
+	MoveID        int `db:"move_id"`
+	LearnMethodID int `db:"move_learn_method_id"`
+
+	learnMethod *LearnMethod
+}
+
+func (pm *PokemonMove) LearnMethod(ctx context.Context) (*LearnMethod, error) {
+	if pm.learnMethod == nil {
+		method, err := pm.model.learnMethodByID(ctx, pm.LearnMethodID)
+		if err != nil {
+			return nil, fmt.Errorf("error while getting learn method for pokemon move: %w", err)
+		}
+		pm.learnMethod = method
+	}
+
+	return pm.learnMethod, nil
+}

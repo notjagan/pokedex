@@ -14,7 +14,8 @@ type Pokemon struct {
 	Name      string `db:"name"`
 	SpeciesID int    `db:"pokemon_species_id"`
 
-	sprites *sprite.PokemonSprites
+	sprites   *sprite.PokemonSprites
+	abilities []PokemonAbility
 }
 
 func (pokemon *Pokemon) LocalizedName(ctx context.Context) (string, error) {
@@ -46,4 +47,16 @@ func (pokemon *Pokemon) Sprites(ctx context.Context) (*sprite.PokemonSprites, er
 	}
 
 	return pokemon.sprites, nil
+}
+
+func (pokemon *Pokemon) Abilities(ctx context.Context) ([]PokemonAbility, error) {
+	if pokemon.abilities == nil {
+		abilities, err := pokemon.model.pokemonAbilities(ctx, pokemon)
+		if err != nil {
+			return nil, fmt.Errorf("error while getting abilities for pokemon: %w", err)
+		}
+		pokemon.abilities = abilities
+	}
+
+	return pokemon.abilities, nil
 }
