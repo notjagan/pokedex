@@ -640,22 +640,27 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 }
 
 type efficacyNames struct {
-	strong  string
-	neutral string
-	weak    string
-	immune  string
+	doubleStrong string
+	strong       string
+	neutral      string
+	weak         string
+	doubleWeak   string
+	immune       string
 }
 
-func efficaciesToFields(
+func (builder *Builder) efficaciesToFields(
 	ctx context.Context,
+	sess *discordgo.Session,
 	effs []model.TypeEfficacy,
 	includeAll bool,
 	names efficacyNames,
 ) ([]*discordgo.MessageEmbedField, error) {
 	n := len(effs)
+	doubleStrengths := make([]string, 0, n)
 	strengths := make([]string, 0, n)
 	neutrals := make([]string, 0, n)
 	weaks := make([]string, 0, n)
+	doubleWeaks := make([]string, 0, n)
 	immunes := make([]string, 0, n)
 
 	for _, te := range effs {
@@ -663,34 +668,41 @@ func efficaciesToFields(
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode type efficacies: %w", err)
 		}
-		name, err := typ.LocalizedName(ctx)
+		emoji, err := builder.ToEmojiString(sess, typ.Name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to encode type efficacies: %w", err)
+			return nil, fmt.Errorf("failed to get emoji for type efficacies: %w", err)
 		}
 
 		switch te.EfficacyLevel() {
 		case model.DoubleSuperEffective:
-			strengths = append(strengths, fmt.Sprintf("**%s**", name))
+			doubleStrengths = append(doubleStrengths, emoji)
 		case model.SuperEffective:
-			strengths = append(strengths, name)
+			strengths = append(strengths, emoji)
 		case model.NormalEffective:
-			neutrals = append(neutrals, name)
+			neutrals = append(neutrals, emoji)
 		case model.NotVeryEffective:
-			weaks = append(weaks, name)
+			weaks = append(weaks, emoji)
 		case model.DoubleNotVeryEffective:
-			weaks = append(weaks, fmt.Sprintf("**%s**", name))
+			doubleWeaks = append(doubleWeaks, emoji)
 		case model.Immune:
-			immunes = append(immunes, name)
+			immunes = append(immunes, emoji)
 		default:
 			return nil, fmt.Errorf("unexpected type efficacy level: %w", ErrUnrecognizedInteraction)
 		}
 	}
 
-	fields := make([]*discordgo.MessageEmbedField, 0, 4)
+	fields := make([]*discordgo.MessageEmbedField, 0, 6)
+	if len(doubleStrengths) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  names.doubleStrong,
+			Value: strings.Join(doubleStrengths, " "),
+		})
+	}
+
 	if len(strengths) > 0 {
 		fields = append(fields, &discordgo.MessageEmbedField{
 			Name:  names.strong,
-			Value: strings.Join(strengths, ", "),
+			Value: strings.Join(strengths, " "),
 		})
 	} else if includeAll {
 		fields = append(fields, &discordgo.MessageEmbedField{
@@ -703,7 +715,7 @@ func efficaciesToFields(
 		if len(neutrals) > 0 {
 			fields = append(fields, &discordgo.MessageEmbedField{
 				Name:  names.neutral,
-				Value: strings.Join(neutrals, ", "),
+				Value: strings.Join(neutrals, " "),
 			})
 		} else {
 			fields = append(fields, &discordgo.MessageEmbedField{
@@ -716,7 +728,7 @@ func efficaciesToFields(
 	if len(weaks) > 0 {
 		fields = append(fields, &discordgo.MessageEmbedField{
 			Name:  names.weak,
-			Value: strings.Join(weaks, ", "),
+			Value: strings.Join(weaks, " "),
 		})
 	} else if includeAll {
 		fields = append(fields, &discordgo.MessageEmbedField{
@@ -725,10 +737,17 @@ func efficaciesToFields(
 		})
 	}
 
+	if len(doubleWeaks) > 0 {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  names.doubleWeak,
+			Value: strings.Join(doubleWeaks, " "),
+		})
+	}
+
 	if len(immunes) > 0 {
 		fields = append(fields, &discordgo.MessageEmbedField{
 			Name:  names.immune,
-			Value: strings.Join(immunes, ", "),
+			Value: strings.Join(immunes, " "),
 		})
 	} else if includeAll {
 		fields = append(fields, &discordgo.MessageEmbedField{
@@ -864,10 +883,12 @@ func (builder *Builder) weak(ctx context.Context) (Command, error) {
 				titleStrings = append(titleStrings, t2)
 			}
 
-			fields, err := efficaciesToFields(ctx, effs, false, efficacyNames{
-				strong: "Weaknesses",
-				weak:   "Resistances",
-				immune: "Immunities",
+			fields, err := builder.efficaciesToFields(ctx, sess, effs, false, efficacyNames{
+				doubleStrong: "Weaknesses (4x)",
+				strong:       "Weaknesses (2x)",
+				weak:         "Resistances (0.5x)",
+				doubleWeak:   "Resistances (0.25x)",
+				immune:       "Immunities",
 			})
 			if err != nil {
 				return nil, fmt.Errorf("could not encode type efficacies: %w", err)
@@ -1026,11 +1047,13 @@ func (builder *Builder) coverage(ctx context.Context) (Command, error) {
 			}
 			titleStrings = append(titleStrings, typeString)
 
-			fields, err := efficaciesToFields(ctx, effs, true, efficacyNames{
-				strong:  "Super Effective",
-				neutral: "Neutral",
-				weak:    "Resists",
-				immune:  "Immune",
+			fields, err := builder.efficaciesToFields(ctx, sess, effs, true, efficacyNames{
+				doubleStrong: "Super Effective (4x)",
+				strong:       "Super Effective (2x)",
+				neutral:      "Neutral (1x)",
+				weak:         "Resists (0.5x)",
+				doubleWeak:   "Resists (0.25x)",
+				immune:       "Immune",
 			})
 			if err != nil {
 				return nil, fmt.Errorf("could not encode type efficacies: %w", err)
