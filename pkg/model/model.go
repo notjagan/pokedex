@@ -930,46 +930,46 @@ func (m *Model) pokemonTypeCombo(ctx context.Context, pokemon *Pokemon) (*TypeCo
 		return nil, ErrUnsetVersion
 	}
 
-	g, err := m.latestGeneration(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting latest generation: %w", err)
-	}
-
 	gen, err := m.Version.Generation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get generation for model version: %w", err)
 	}
 
 	var ids []struct {
-		ID int `db:"id"`
+		ID *int `db:"id"`
 	}
 	err = m.db.SelectContext(ctx, &ids,
 		/* sql */ `
-		SELECT DISTINCT FIRST_VALUE(type_id) OVER (
-			PARTITION BY slot
-			ORDER BY generation_id ASC
-		) AS id
-		FROM (
-			SELECT type_id, pokemon_id, slot, ? AS generation_id
-			FROM pokemon_v2_pokemontype
-			UNION ALL
-			SELECT type_id, pokemon_id, slot, generation_id
+		WITH tp AS (
+			SELECT first_value(type_id) OVER (
+				PARTITION BY slot
+				ORDER BY generation_id ASC
+			) AS type_id, pokemon_id, slot
 			FROM pokemon_v2_pokemontypepast
+			WHERE pokemon_id = ? AND generation_id >= ?
 		)
-		WHERE pokemon_id = ? AND generation_id >= ?
-	`, g.ID, pokemon.ID, gen.ID)
+		SELECT DISTINCT CASE
+			WHEN EXISTS(SELECT * FROM tp) THEN tp.type_id
+			ELSE t.type_id
+		END AS id
+		FROM pokemon_v2_pokemontype t
+		LEFT JOIN tp
+			ON t.pokemon_id = tp.pokemon_id AND t.slot = tp.slot
+		WHERE t.pokemon_id = ?
+		ORDER BY t.slot
+	`, pokemon.ID, gen.ID, pokemon.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get type ids for pokemon %q: %w", pokemon.Name, err)
 	}
 
-	t1, err := m.typeByID(ctx, ids[0].ID)
+	t1, err := m.typeByID(ctx, *ids[0].ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get first type for pokemon %q: %w", pokemon.Name, err)
 	}
 
 	var t2 *Type
-	if len(ids) > 1 {
-		t2, err = m.typeByID(ctx, ids[1].ID)
+	if len(ids) > 1 && ids[1].ID != nil {
+		t2, err = m.typeByID(ctx, *ids[1].ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get second type for pokemon %q: %w", pokemon.Name, err)
 		}
@@ -1078,6 +1078,68 @@ func (m *Model) abilityLocalizedName(ctx context.Context, ability *Ability) (str
 	`, ability.ID, m.Language.ID).Scan(&name)
 	if err != nil {
 		return "", fmt.Errorf("could not find localized name for ability %q: %w", ability.Name, err)
+	}
+
+	return name, nil
+}
+
+func (m *Model) pokemonStats(ctx context.Context, pokemon *Pokemon) (*PokemonStats, error) {
+	var s []struct {
+		StatID   int `db:"stat_id"`
+		BaseStat int `db:"base_stat"`
+	}
+	err := m.db.SelectContext(ctx, &s,
+		/* sql */ `
+		SELECT stat_id, base_stat
+		FROM pokemon_v2_pokemonstat p
+		WHERE pokemon_id = ?
+	`, pokemon.ID)
+	if err != nil {
+		return nil, fmt.Errorf("could not get stats for pokemon %q: %w", pokemon.Name, err)
+	}
+
+	var stats PokemonStats = make(map[int]int, len(s))
+	for _, stat := range s {
+		stats[stat.StatID] = stat.BaseStat
+	}
+
+	return &stats, nil
+}
+
+func (m *Model) IntrinsicStats(ctx context.Context) ([]Stat, error) {
+	var stats []Stat
+	err := m.db.SelectContext(ctx, &stats,
+		/* sql */ `
+		SELECT id, name
+		FROM pokemon_v2_stat
+		WHERE is_battle_only = 0
+		ORDER BY game_index ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("could not get all intrinsic stats: %w", err)
+	}
+
+	for i := range stats {
+		stats[i].model = m
+	}
+
+	return stats, nil
+}
+
+func (m *Model) statLocalizedName(ctx context.Context, stat *Stat) (string, error) {
+	if m.Language == nil {
+		return "", ErrUnsetLanguage
+	}
+
+	var name string
+	err := m.db.QueryRowxContext(ctx,
+		/* sql */ `
+		SELECT name
+		FROM pokemon_v2_statname
+		WHERE stat_id = ? AND language_id = ?
+	`, stat.ID, m.Language.ID).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("could not find localized name for stat %q: %w", stat.Name, err)
 	}
 
 	return name, nil

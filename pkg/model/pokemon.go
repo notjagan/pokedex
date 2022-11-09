@@ -16,6 +16,7 @@ type Pokemon struct {
 
 	sprites   *sprite.PokemonSprites
 	abilities []PokemonAbility
+	stats     *PokemonStats
 }
 
 func (pokemon *Pokemon) LocalizedName(ctx context.Context) (string, error) {
@@ -59,4 +60,16 @@ func (pokemon *Pokemon) Abilities(ctx context.Context) ([]PokemonAbility, error)
 	}
 
 	return pokemon.abilities, nil
+}
+
+func (pokemon *Pokemon) BaseStat(ctx context.Context, stat Stat) (int, error) {
+	if pokemon.stats == nil {
+		stats, err := pokemon.model.pokemonStats(ctx, pokemon)
+		if err != nil {
+			return 0, fmt.Errorf("could not get stats for pokemon: %w", err)
+		}
+		pokemon.stats = stats
+	}
+
+	return pokemon.stats.baseStat(stat)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -1201,7 +1202,7 @@ func (builder *Builder) dex(ctx context.Context) (Command, error) {
 				return nil, fmt.Errorf("could not open reader for sprite path %q: %w", spritePath, err)
 			}
 
-			fields := make([]*discordgo.MessageEmbedField, 0, 2)
+			fields := make([]*discordgo.MessageEmbedField, 0, 8)
 
 			abilities, err := pokemon.Abilities(ctx)
 			if err != nil {
@@ -1236,6 +1237,37 @@ func (builder *Builder) dex(ctx context.Context) (Command, error) {
 			if len(hiddenAbilities) > 0 {
 				hiddenAbilityField.Value = strings.Join(hiddenAbilities, ", ")
 				fields = append(fields, &hiddenAbilityField)
+			}
+
+			for i := 0; i < 3-len(fields); i++ {
+				fields = append(fields, &discordgo.MessageEmbedField{
+					Name:   "\u200b",
+					Value:  "\u200b",
+					Inline: true,
+				})
+			}
+
+			is, err := mdl.IntrinsicStats(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("error while getting all intrinsic stats: %w", err)
+			}
+
+			for _, stat := range is {
+				bs, err := pokemon.BaseStat(ctx, stat)
+				if err != nil {
+					return nil, fmt.Errorf("error while getting base stat for pokemon: %w", err)
+				}
+
+				name, err := stat.LocalizedName(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("error while getting localized name for stat: %w", err)
+				}
+
+				fields = append(fields, &discordgo.MessageEmbedField{
+					Name:   name,
+					Value:  strconv.Itoa(bs),
+					Inline: true,
+				})
 			}
 
 			return &discordgo.InteractionResponseData{
