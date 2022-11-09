@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -176,18 +177,31 @@ func (bot *Bot) registerCommands(ctx context.Context) error {
 			data := interaction.MessageComponentData()
 			switch data.ComponentType {
 			case discordgo.ButtonComponent:
-				name := interaction.Message.Interaction.Name
+				reader := bytes.NewReader([]byte(data.CustomID))
+				followUp, err := command.ButtonFollowUp(reader)
+				if err != nil {
+					log.Printf("could not read follow-up command: %v", err)
+					return
+				}
+
+				var name string
+				if followUp != nil {
+					name = *followUp
+				} else {
+					name = interaction.Message.Interaction.Name
+				}
 				cmd, ok := bot.commands[name]
 				if !ok {
 					log.Printf("unrecognized command %q", name)
 					return
 				}
 
-				err := cmd.Button(ctx, mdl, sess, interaction)
+				err = cmd.Button(ctx, mdl, sess, interaction, reader)
 				if err != nil {
 					log.Printf("error while handling button press for command %q: %v", cmd.Name(), err)
 				}
 				return
+
 			default:
 				log.Println("unrecognized component type for message interaction")
 			}

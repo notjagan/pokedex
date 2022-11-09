@@ -310,7 +310,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: 0,
 		},
 	}
-	homeID, err := customID(phome)
+	homeID, err := customID(phome, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create next button: %w", err)
 	}
@@ -329,7 +329,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: prevOffset,
 		},
 	}
-	prevID, err := customID(pprev)
+	prevID, err := customID(pprev, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create previous button: %w", err)
 	}
@@ -347,7 +347,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: p.Page.Offset + p.Page.Limit,
 		},
 	}
-	nextID, err := customID(pnext)
+	nextID, err := customID(pnext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create next button: %w", err)
 	}

@@ -24,16 +24,19 @@ type (
 		ApplicationCommand() *discordgo.ApplicationCommand
 		Handle(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
 		Autocomplete(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
-		Button(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
+		Button(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, io.Reader) error
 		Name() string
 	}
 
-	buttonState interface {
-		ActionName() byte
+	action interface {
+		Name() byte
 	}
 
 	handler[S any, T any] func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) (T, error)
-	paginator[T any]      struct {
+	followUp[T any]       struct {
+		Options T
+	}
+	paginator[T any] struct {
 		Options T
 		Page    Page
 	}
@@ -47,12 +50,21 @@ type (
 	}
 )
 
-func (paginator[T]) ActionName() byte {
+func (paginator[T]) Name() byte {
 	return 'p'
 }
 
-func customID(b buttonState) (string, error) {
-	data, err := marshal(b)
+func (followUp[T]) Name() byte {
+	return 'f'
+}
+
+func customID(a action, cmdName *string) (string, error) {
+	cmdData, err := marshal(cmdName)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal follow-up command: %w", err)
+	}
+
+	actionData, err := marshal(a)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal button data: %w", err)
 	}
@@ -60,7 +72,25 @@ func customID(b buttonState) (string, error) {
 	var uuid [4]byte
 	rand.Reader.Read(uuid[:])
 
-	return string(b.ActionName()) + data + string(uuid[:]), nil
+	return cmdData + string(a.Name()) + actionData + string(uuid[:]), nil
+}
+
+func ButtonFollowUp(reader io.Reader) (*string, error) {
+	followUp, err := unmarshal[*string](reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal follow-up command: %w", err)
+	}
+
+	return *followUp, nil
+}
+
+func buttonState[T action](reader io.Reader) (*T, error) {
+	state, err := unmarshal[T](reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal button state: %w", err)
+	}
+
+	return state, nil
 }
 
 func (cmd command[T]) ApplicationCommand() *discordgo.ApplicationCommand {
@@ -72,6 +102,39 @@ func (cmd command[T]) Name() string {
 }
 
 var ErrUnrecognizedInteraction = errors.New("could not handle interaction")
+
+func (cmd command[T]) responseBody(
+	ctx context.Context,
+	mdl *model.Model,
+	sess *discordgo.Session,
+	interaction *discordgo.InteractionCreate,
+	opt T,
+) (*discordgo.InteractionResponseData, error) {
+	var body *discordgo.InteractionResponseData
+	var err error
+	if cmd.handle != nil {
+		body, err = cmd.handle(ctx, mdl, sess, interaction, &opt)
+		if err != nil {
+			return nil, fmt.Errorf("error while calling handler: %w", err)
+		}
+	} else if cmd.paginate != nil && cmd.limit != nil {
+		paginator := paginator[T]{
+			Options: opt,
+			Page: Page{
+				Limit:  *cmd.limit,
+				Offset: 0,
+			},
+		}
+		body, err = cmd.paginate(ctx, mdl, sess, interaction, paginator)
+		if err != nil {
+			return nil, fmt.Errorf("error while calling handler: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("no handler for command: %w", ErrUnrecognizedInteraction)
+	}
+
+	return body, nil
+}
 
 func (cmd command[T]) Handle(
 	ctx context.Context,
@@ -87,37 +150,17 @@ func (cmd command[T]) Handle(
 		return fmt.Errorf("error while decoding options for command %q: %w", data.Name, err)
 	}
 
-	var body *discordgo.InteractionResponseData
-	var typ discordgo.InteractionResponseType
-	if cmd.handle != nil {
-		body, err = cmd.handle(ctx, mdl, sess, interaction, &structure)
-		if err != nil {
-			return fmt.Errorf("error while calling handler: %w", err)
-		}
-		typ = discordgo.InteractionResponseChannelMessageWithSource
-	} else if cmd.paginate != nil && cmd.limit != nil {
-		paginator := paginator[T]{
-			Options: structure,
-			Page: Page{
-				Limit:  *cmd.limit,
-				Offset: 0,
-			},
-		}
-		body, err = cmd.paginate(ctx, mdl, sess, interaction, paginator)
-		if err != nil {
-			return fmt.Errorf("error while calling handler: %w", err)
-		}
-		typ = discordgo.InteractionResponseChannelMessageWithSource
-	} else {
-		return fmt.Errorf("handler not found for command %q: %w", data.Name, ErrUnrecognizedInteraction)
+	body, err := cmd.responseBody(ctx, mdl, sess, interaction, structure)
+	if err != nil {
+		return fmt.Errorf("could not handle command %q: %w", cmd.Name(), err)
 	}
 
 	err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
-		Type: typ,
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: body,
 	})
 	if err != nil {
-		return fmt.Errorf("error while responding to command: %w", err)
+		return fmt.Errorf("error while responding to command %q: %w", cmd.Name(), err)
 	}
 
 	return nil
@@ -128,19 +171,22 @@ func (cmd command[T]) Button(
 	mdl *model.Model,
 	sess *discordgo.Session,
 	interaction *discordgo.InteractionCreate,
+	reader io.Reader,
 ) error {
-	data := interaction.MessageComponentData()
-	action := data.CustomID[0]
-	id := data.CustomID[1:]
+	var action [1]byte
+	_, err := io.ReadFull(reader, action[:])
+	if err != nil {
+		return fmt.Errorf("could not read action from button state: %w", err)
+	}
 
-	switch action {
-	case paginator[T]{}.ActionName():
-		p, err := unmarshal[paginator[T]](id)
+	switch action[0] {
+	case paginator[T]{}.Name():
+		page, err := buttonState[paginator[T]](reader)
 		if err != nil {
 			return fmt.Errorf("error while deserializing pagination data: %w", err)
 		}
 
-		body, err := cmd.paginate(ctx, mdl, sess, interaction, *p)
+		body, err := cmd.paginate(ctx, mdl, sess, interaction, *page)
 		if err != nil {
 			return fmt.Errorf("error while calling pagination handler: %w", err)
 		}
@@ -161,10 +207,34 @@ func (cmd command[T]) Button(
 			return fmt.Errorf("failed to complete interaction: %w", err)
 		}
 
-		return nil
+	case followUp[T]{}.Name():
+		s, err := buttonState[followUp[T]](reader)
+		if err != nil {
+			return fmt.Errorf("error while deserializing follow-up data: %w", err)
+		}
+
+		body, err := cmd.responseBody(ctx, mdl, sess, interaction, s.Options)
+		if err != nil {
+			return fmt.Errorf("could not handle command %q: %w", cmd.Name(), err)
+		}
+
+		_, err = sess.ChannelMessageSendEmbedsReply(interaction.ChannelID, body.Embeds, interaction.Message.Reference())
+		if err != nil {
+			return fmt.Errorf("error while sending follow-up reply: %w", err)
+		}
+
+		err = sess.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to complete interaction: %w", err)
+		}
+
 	default:
 		return fmt.Errorf("unknown button action %q: %w", action, ErrUnrecognizedInteraction)
 	}
+
+	return nil
 }
 
 func (cmd command[T]) Autocomplete(
@@ -453,11 +523,9 @@ func (d *decoder) decode(pointer any) error {
 	return d.decodeValue(value.Elem())
 }
 
-func unmarshal[T any](data string) (*T, error) {
+func unmarshal[T any](reader io.Reader) (*T, error) {
 	var structure T
-	dec := decoder{
-		Reader: bytes.NewBuffer([]byte(data)),
-	}
+	dec := decoder{Reader: reader}
 	err := dec.decode(&structure)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal data: %w", err)
