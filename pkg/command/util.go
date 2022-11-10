@@ -89,7 +89,12 @@ func searchChoices[T model.Localizer](ctx context.Context, s searcher[T]) ([]*di
 	return choices, nil
 }
 
-func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
+func (p paginator[T]) moveButtons(hasNext bool, cmds commands) (*discordgo.ActionsRow, error) {
+	cmd, err := optionCommand[T](cmds)
+	if err != nil {
+		return nil, fmt.Errorf("could not find command in registry: %w", err)
+	}
+
 	if p.Page.Offset == 0 && !hasNext {
 		return nil, nil
 	}
@@ -101,7 +106,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: 0,
 		},
 	}
-	homeID, err := customID(phome, nil)
+	homeID, err := customID(phome, cmd.Name())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create next button: %w", err)
 	}
@@ -120,7 +125,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: prevOffset,
 		},
 	}
-	prevID, err := customID(pprev, nil)
+	prevID, err := customID(pprev, cmd.Name())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create previous button: %w", err)
 	}
@@ -138,7 +143,7 @@ func (p paginator[T]) moveButtons(hasNext bool) (*discordgo.ActionsRow, error) {
 			Offset: p.Page.Offset + p.Page.Limit,
 		},
 	}
-	nextID, err := customID(pnext, nil)
+	nextID, err := customID(pnext, cmd.Name())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create next button: %w", err)
 	}

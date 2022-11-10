@@ -20,6 +20,7 @@ type movesResponder struct {
 	moveCount         int
 	learnMethodNames  []model.LearnMethodName
 	emojis            Emojis
+	commands          commands
 }
 
 func (resp movesResponder) Paginate(
@@ -80,7 +81,7 @@ func (resp movesResponder) Paginate(
 		Fields:      fields,
 	}
 
-	buttons, err := p.moveButtons(hasNext)
+	buttons, err := p.moveButtons(hasNext, resp.commands)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate pagination buttons: %w", err)
 	}
@@ -133,7 +134,8 @@ func (builder *Builder) moves(ctx context.Context) (Command, error) {
 		learnMethodNames: []model.LearnMethodName{
 			model.LevelUp,
 		},
-		emojis: builder.emojis,
+		emojis:   builder.emojis,
+		commands: builder.commands,
 	}
 
 	return command[movesOptions]{

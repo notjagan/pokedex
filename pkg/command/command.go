@@ -69,7 +69,7 @@ func (followUp[T]) Name() byte {
 	return 'f'
 }
 
-func customID(a action, cmdName *string) (string, error) {
+func customID(a action, cmdName string) (string, error) {
 	cmdData, err := marshal(cmdName)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal follow-up command: %w", err)
@@ -87,12 +87,12 @@ func customID(a action, cmdName *string) (string, error) {
 }
 
 func ButtonFollowUp(reader io.Reader) (*string, error) {
-	followUp, err := unmarshal[*string](reader)
+	followUp, err := unmarshal[string](reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal follow-up command: %w", err)
 	}
 
-	return *followUp, nil
+	return followUp, nil
 }
 
 func buttonState[T action](reader io.Reader) (*T, error) {
@@ -114,7 +114,7 @@ func (cmd command[T]) Name() string {
 
 var ErrUnrecognizedInteraction = errors.New("could not handle interaction")
 
-func followUpButton[T options](cmds commands, opt T, button discordgo.Button) (*discordgo.Button, error) {
+func optionCommand[T options](cmds commands) (*command[T], error) {
 	var c command[T]
 	var ok bool
 	for _, cmd := range cmds {
@@ -126,8 +126,17 @@ func followUpButton[T options](cmds commands, opt T, button discordgo.Button) (*
 		return nil, fmt.Errorf("no command with options type found: %w", ErrUnrecognizedInteraction)
 	}
 
+	return &c, nil
+}
+
+func followUpButton[T options](cmds commands, opt T, button discordgo.Button) (*discordgo.Button, error) {
+	c, err := optionCommand[T](cmds)
+	if err != nil {
+		return nil, fmt.Errorf("could not find matching command: %w", err)
+	}
+
 	name := c.Name()
-	id, err := customID(followUp[T]{opt}, &name)
+	id, err := customID(followUp[T]{opt}, name)
 	if err != nil {
 		return nil, fmt.Errorf("could not create custom id for follow-up button: %w", err)
 	}
