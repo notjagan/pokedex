@@ -1239,7 +1239,8 @@ func (builder *Builder) dex(ctx context.Context) (Command, error) {
 				fields = append(fields, &hiddenAbilityField)
 			}
 
-			for i := 0; i < 3-len(fields); i++ {
+			padding := 3 - len(fields)
+			for i := 0; i < padding; i++ {
 				fields = append(fields, &discordgo.MessageEmbedField{
 					Name:   "\u200b",
 					Value:  "\u200b",
