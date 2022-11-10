@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/notjagan/pokedex/pkg/config"
 	"github.com/notjagan/pokedex/pkg/model"
 )
-
-type Emojis map[string]*discordgo.Emoji
 
 type Builder struct {
 	model *model.Model
