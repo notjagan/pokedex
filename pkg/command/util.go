@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -281,4 +282,28 @@ func efficaciesToFields(
 	}
 
 	return fields, nil
+}
+
+func pokemonSpriteFile(ctx context.Context, pokemon *model.Pokemon) (*discordgo.File, error) {
+	sprites, err := pokemon.Sprites(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error while getting sprites for pokemon: %w", err)
+	}
+
+	sprite := sprites.Front.Default
+	spritePath, err := sprite.Filepath()
+	if err != nil {
+		return nil, fmt.Errorf("could not get filepath for pokemon sprite: %w", err)
+	}
+
+	reader, err := os.Open(string(spritePath))
+	if err != nil {
+		return nil, fmt.Errorf("could not open reader for sprite path %q: %w", spritePath, err)
+	}
+
+	return &discordgo.File{
+		Name:        fmt.Sprintf("%s.png", pokemon.Name),
+		ContentType: "image/png",
+		Reader:      reader,
+	}, nil
 }

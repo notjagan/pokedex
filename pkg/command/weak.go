@@ -34,6 +34,7 @@ func (resp weakResponder) Handle(
 ) (*discordgo.InteractionResponseData, error) {
 	titleStrings := make([]string, 0, 3)
 	combo := mdl.NewTypeCombo()
+	var sprite *discordgo.File
 	switch {
 	case opt.Pokemon != nil:
 		pokemon, err := mdl.PokemonByName(ctx, opt.Pokemon.Name.Value)
@@ -58,6 +59,11 @@ func (resp weakResponder) Handle(
 		combo, err = pokemon.TypeCombo(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("could not get type combo for pokemon: %w", err)
+		}
+
+		sprite, err = pokemonSpriteFile(ctx, pokemon)
+		if err != nil {
+			return nil, fmt.Errorf("could not get sprite for pokemon %q: %w", pokemon.Name, err)
 		}
 	case opt.Type != nil:
 		typ1, err := mdl.TypeByName(ctx, opt.Type.Name1.Value)
@@ -107,15 +113,27 @@ func (resp weakResponder) Handle(
 		return nil, fmt.Errorf("could not encode type efficacies: %w", err)
 	}
 
-	return &discordgo.InteractionResponseData{
+	embed := &discordgo.MessageEmbed{
+		Title:       strings.Join(titleStrings, " "),
+		Description: "Defensive type chart",
+		Fields:      fields,
+	}
+	data := &discordgo.InteractionResponseData{
 		Embeds: []*discordgo.MessageEmbed{
-			{
-				Title:       strings.Join(titleStrings, " "),
-				Description: "Defensive type chart",
-				Fields:      fields,
-			},
+			embed,
 		},
-	}, nil
+	}
+
+	if sprite != nil {
+		data.Files = []*discordgo.File{
+			sprite,
+		}
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{
+			URL: fmt.Sprintf("attachment://%s", sprite.Name),
+		}
+	}
+
+	return data, nil
 }
 
 func (resp weakResponder) Autocomplete(

@@ -268,6 +268,7 @@ func (cmd command[T]) Button(
 			Content:    body.Content,
 			Embeds:     body.Embeds,
 			Components: body.Components,
+			Files:      body.Files,
 			Reference:  interaction.Message.Reference(),
 		})
 		if err != nil {

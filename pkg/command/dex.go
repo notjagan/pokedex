@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -80,22 +79,6 @@ func (resp dexResponder) Handle(
 		return nil, fmt.Errorf("error while getting localized name for model generation: %w", err)
 	}
 
-	sprites, err := pokemon.Sprites(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error while getting sprites for pokemon: %w", err)
-	}
-
-	sprite := sprites.Front.Default
-	spritePath, err := sprite.Filepath()
-	if err != nil {
-		return nil, fmt.Errorf("could not get filepath for pokemon sprite: %w", err)
-	}
-
-	reader, err := os.Open(string(spritePath))
-	if err != nil {
-		return nil, fmt.Errorf("could not open reader for sprite path %q: %w", spritePath, err)
-	}
-
 	fields := make([]*discordgo.MessageEmbedField, 0, 8)
 
 	abilities, err := pokemon.Abilities(ctx)
@@ -165,6 +148,11 @@ func (resp dexResponder) Handle(
 		})
 	}
 
+	sprite, err := pokemonSpriteFile(ctx, pokemon)
+	if err != nil {
+		return nil, fmt.Errorf("could not get sprite for pokemon %q: %w", pokemon.Name, err)
+	}
+
 	learnsetButton, err := followUpButton(
 		resp.commands,
 		learnsetOptions{
@@ -205,17 +193,13 @@ func (resp dexResponder) Handle(
 				Title:       strings.Join(titleStrings, " "),
 				Description: genName,
 				Thumbnail: &discordgo.MessageEmbedThumbnail{
-					URL: "attachment://sprite.png",
+					URL: fmt.Sprintf("attachment://%s", sprite.Name),
 				},
 				Fields: fields,
 			},
 		},
 		Files: []*discordgo.File{
-			{
-				Name:        "sprite.png",
-				ContentType: "image/png",
-				Reader:      reader,
-			},
+			sprite,
 		},
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{

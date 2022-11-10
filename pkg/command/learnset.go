@@ -79,9 +79,17 @@ func (resp learnsetResponder) Paginate(
 		return nil, fmt.Errorf("failed to convert pokemon moves to discord fields: %w", err)
 	}
 
+	sprite, err := pokemonSpriteFile(ctx, pokemon)
+	if err != nil {
+		return nil, fmt.Errorf("could not get sprite for pokemon %q: %w", pokemon.Name, err)
+	}
+
 	embed := &discordgo.MessageEmbed{
 		Title:  fmt.Sprintf("%s, %s", pokemonName, genName),
 		Fields: fields,
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: fmt.Sprintf("attachment://%s", sprite.Name),
+		},
 	}
 	if p.Options.MaxLevel != nil {
 		embed.Description = fmt.Sprintf("Max Lv. %d", *p.Options.MaxLevel)
@@ -99,6 +107,9 @@ func (resp learnsetResponder) Paginate(
 	return &discordgo.InteractionResponseData{
 		Embeds:     []*discordgo.MessageEmbed{embed},
 		Components: components,
+		Files: []*discordgo.File{
+			sprite,
+		},
 	}, nil
 }
 
