@@ -21,7 +21,7 @@ type (
 	}
 
 	Command interface {
-		ApplicationCommand() *discordgo.ApplicationCommand
+		ApplicationCommand() discordgo.ApplicationCommand
 		Handle(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
 		Autocomplete(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate) error
 		Button(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, io.Reader) error
@@ -32,21 +32,32 @@ type (
 		Name() byte
 	}
 
-	handler[S any, T any] func(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, S) (T, error)
-	followUp[T any]       struct {
+	options             any
+	followUp[T options] struct {
 		Options T
 	}
-	paginator[T any] struct {
+	paginator[T options] struct {
 		Options T
 		Page    Page
 	}
 
-	command[T any] struct {
-		applicationCommand *discordgo.ApplicationCommand
-		handle             handler[*T, *discordgo.InteractionResponseData]
-		autocomplete       handler[*T, []*discordgo.ApplicationCommandOptionChoice]
-		paginate           handler[paginator[T], *discordgo.InteractionResponseData]
-		limit              *int
+	handler[T options] interface {
+		Handle(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, *T) (*discordgo.InteractionResponseData, error)
+	}
+	autocompleter[T options] interface {
+		Autocomplete(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, *T) ([]*discordgo.ApplicationCommandOptionChoice, error)
+	}
+	pager[T options] interface {
+		Paginate(context.Context, *model.Model, *discordgo.Session, *discordgo.InteractionCreate, paginator[T]) (*discordgo.InteractionResponseData, error)
+		Initial() Page
+	}
+
+	command[T options] struct {
+		handler       handler[T]
+		autocompleter autocompleter[T]
+		pager         pager[T]
+
+		command discordgo.ApplicationCommand
 	}
 )
 
@@ -93,12 +104,12 @@ func buttonState[T action](reader io.Reader) (*T, error) {
 	return state, nil
 }
 
-func (cmd command[T]) ApplicationCommand() *discordgo.ApplicationCommand {
-	return cmd.applicationCommand
+func (cmd command[T]) ApplicationCommand() discordgo.ApplicationCommand {
+	return cmd.command
 }
 
 func (cmd command[T]) Name() string {
-	return cmd.applicationCommand.Name
+	return cmd.command.Name
 }
 
 var ErrUnrecognizedInteraction = errors.New("could not handle interaction")
@@ -112,25 +123,23 @@ func (cmd command[T]) responseBody(
 ) (*discordgo.InteractionResponseData, error) {
 	var body *discordgo.InteractionResponseData
 	var err error
-	if cmd.handle != nil {
-		body, err = cmd.handle(ctx, mdl, sess, interaction, &opt)
+	switch {
+	case cmd.handler != nil:
+		body, err = cmd.handler.Handle(ctx, mdl, sess, interaction, &opt)
 		if err != nil {
-			return nil, fmt.Errorf("error while calling handler: %w", err)
+			return nil, fmt.Errorf("error while calling handler for command %q: %w", cmd.Name(), err)
 		}
-	} else if cmd.paginate != nil && cmd.limit != nil {
+	case cmd.pager != nil:
 		paginator := paginator[T]{
 			Options: opt,
-			Page: Page{
-				Limit:  *cmd.limit,
-				Offset: 0,
-			},
+			Page:    cmd.pager.Initial(),
 		}
-		body, err = cmd.paginate(ctx, mdl, sess, interaction, paginator)
+		body, err = cmd.pager.Paginate(ctx, mdl, sess, interaction, paginator)
 		if err != nil {
-			return nil, fmt.Errorf("error while calling handler: %w", err)
+			return nil, fmt.Errorf("error while calling handler %q: %w", cmd.Name(), err)
 		}
-	} else {
-		return nil, fmt.Errorf("no handler for command: %w", ErrUnrecognizedInteraction)
+	default:
+		return nil, fmt.Errorf("no handler for command %q: %w", cmd.Name(), ErrUnrecognizedInteraction)
 	}
 
 	return body, nil
@@ -181,21 +190,27 @@ func (cmd command[T]) Button(
 
 	switch action[0] {
 	case paginator[T]{}.Name():
+		if cmd.pager == nil {
+			return fmt.Errorf("command %q does not support pagination: %w", cmd.Name(), ErrUnrecognizedInteraction)
+		}
+
 		page, err := buttonState[paginator[T]](reader)
 		if err != nil {
 			return fmt.Errorf("error while deserializing pagination data: %w", err)
 		}
 
-		body, err := cmd.paginate(ctx, mdl, sess, interaction, *page)
+		body, err := cmd.pager.Paginate(ctx, mdl, sess, interaction, *page)
 		if err != nil {
 			return fmt.Errorf("error while calling pagination handler: %w", err)
 		}
 
-		edit := discordgo.NewMessageEdit(interaction.ChannelID, interaction.Message.ID)
-		edit.Content = &body.Content
-		edit.Embeds = body.Embeds
-		edit.Components = body.Components
-		_, err = sess.ChannelMessageEditComplex(edit)
+		_, err = sess.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			Channel:    interaction.ChannelID,
+			ID:         interaction.Message.ID,
+			Content:    &body.Content,
+			Embeds:     body.Embeds,
+			Components: body.Components,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to edit message: %w", err)
 		}
@@ -218,7 +233,12 @@ func (cmd command[T]) Button(
 			return fmt.Errorf("could not handle command %q: %w", cmd.Name(), err)
 		}
 
-		_, err = sess.ChannelMessageSendEmbedsReply(interaction.ChannelID, body.Embeds, interaction.Message.Reference())
+		_, err = sess.ChannelMessageSendComplex(interaction.ChannelID, &discordgo.MessageSend{
+			Content:    body.Content,
+			Embeds:     body.Embeds,
+			Components: body.Components,
+			Reference:  interaction.Message.Reference(),
+		})
 		if err != nil {
 			return fmt.Errorf("error while sending follow-up reply: %w", err)
 		}
@@ -249,7 +269,11 @@ func (cmd command[T]) Autocomplete(
 		return fmt.Errorf("error while decoding options for autocomplete: %w", err)
 	}
 
-	choices, err := cmd.autocomplete(ctx, mdl, sess, interaction, &structure)
+	if cmd.autocompleter == nil {
+		return fmt.Errorf("command %q does not support autocompletion: %w", cmd.Name(), ErrUnrecognizedInteraction)
+	}
+
+	choices, err := cmd.autocompleter.Autocomplete(ctx, mdl, sess, interaction, &structure)
 	if err != nil {
 		return fmt.Errorf("error while calling autocompletion handler: %w", err)
 	}

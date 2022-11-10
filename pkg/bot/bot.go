@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/notjagan/pokedex/pkg/command"
@@ -18,6 +19,7 @@ type Bot struct {
 	session  *discordgo.Session
 	commands map[string]command.Command
 	models   map[string]*model.Model
+	emojis   command.Emojis
 }
 
 func New(ctx context.Context, config config.Config) (*Bot, error) {
@@ -26,7 +28,8 @@ func New(ctx context.Context, config config.Config) (*Bot, error) {
 		return nil, fmt.Errorf("failed to instantiate discord bot: %w", err)
 	}
 
-	cmds, err := command.All(ctx, config)
+	emojis := make(command.Emojis)
+	cmds, err := command.All(ctx, config, emojis)
 	if err != nil {
 		return nil, fmt.Errorf("error while getting all commands for bot: %w", err)
 	}
@@ -36,6 +39,7 @@ func New(ctx context.Context, config config.Config) (*Bot, error) {
 		config:   config,
 		commands: cmds,
 		models:   make(map[string]*model.Model),
+		emojis:   emojis,
 	}, nil
 }
 
@@ -81,12 +85,31 @@ func (bot *Bot) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to start discord session: %w", err)
 	}
 
+	connected := make(chan error)
+
 	bot.session.AddHandler(func(_ *discordgo.Session, create *discordgo.GuildCreate) {
 		_, err := bot.addModel(ctx, create.Guild.ID, discordgo.Locale(create.PreferredLocale))
 		if err != nil {
 			log.Printf("failed to add guild %q: %v", create.Guild.Name, err)
+			return
+		}
+
+		if create.Guild.ID == bot.config.Discord.CommandConfig.ResourceGuildID {
+			connected <- err
+			for _, emoji := range create.Guild.Emojis {
+				bot.emojis[emoji.Name] = emoji
+			}
 		}
 	})
+
+	select {
+	case err := <-connected:
+		if err != nil {
+			return fmt.Errorf("failed to connect to resource guild: %w", err)
+		}
+	case <-time.After(time.Duration(bot.config.Discord.CommandConfig.ResourceTimeout) * time.Millisecond):
+		return fmt.Errorf("timeout while connecting to resource server")
+	}
 
 	err = bot.registerCommands(ctx)
 	if err != nil {
@@ -213,7 +236,8 @@ func (bot *Bot) registerCommands(ctx context.Context) error {
 	cmds := make([]*discordgo.ApplicationCommand, len(bot.commands))
 	i := 0
 	for _, cmd := range bot.commands {
-		cmds[i] = cmd.ApplicationCommand()
+		ac := cmd.ApplicationCommand()
+		cmds[i] = &ac
 		i++
 	}
 

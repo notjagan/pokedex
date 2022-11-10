@@ -1,6 +1,16 @@
 [discord]
-    token = "<Discord API token>"
-    resource_guild_id = "<Guild ID>"
+token = "<Discord API token>"
+
+[discord.commands]
+resource_guild_id = "<Guild ID>"
+resource_timeout = 5000
+move_limit = 15
+autocomplete_limit = 25
 
 [database]
-    path = "db.sqlite3"
+path = "db.sqlite3"
+
+[pokemon.metadata]
+min_level = 1
+max_level = 100
+move_count = 4
