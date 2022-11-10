@@ -114,6 +114,28 @@ func (cmd command[T]) Name() string {
 
 var ErrUnrecognizedInteraction = errors.New("could not handle interaction")
 
+func followUpButton[T options](cmds commands, opt T, button discordgo.Button) (*discordgo.Button, error) {
+	var c command[T]
+	var ok bool
+	for _, cmd := range cmds {
+		if c, ok = cmd.(command[T]); ok {
+			break
+		}
+	}
+	if !ok {
+		return nil, fmt.Errorf("no command with options type found: %w", ErrUnrecognizedInteraction)
+	}
+
+	name := c.Name()
+	id, err := customID(followUp[T]{opt}, &name)
+	if err != nil {
+		return nil, fmt.Errorf("could not create custom id for follow-up button: %w", err)
+	}
+	button.CustomID = id
+
+	return &button, nil
+}
+
 func (cmd command[T]) responseBody(
 	ctx context.Context,
 	mdl *model.Model,

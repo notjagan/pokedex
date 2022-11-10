@@ -21,6 +21,7 @@ type dexOptions struct {
 type dexResponder struct {
 	autocompleteLimit int
 	emojis            Emojis
+	commands          commands
 }
 
 func (resp dexResponder) Handle(
@@ -164,6 +165,40 @@ func (resp dexResponder) Handle(
 		})
 	}
 
+	learnsetButton, err := followUpButton(
+		resp.commands,
+		learnsetOptions{
+			PokemonName: discordField[string]{
+				Value: pokemon.Name,
+			},
+		},
+		discordgo.Button{
+			Label: "Learnset",
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("could not create follow-up button for learnset: %w", err)
+	}
+
+	weakButton, err := followUpButton(
+		resp.commands,
+		weakOptions{
+			Pokemon: &struct {
+				Name discordField[string] `option:"pokemon"`
+			}{
+				Name: discordField[string]{
+					Value: pokemon.Name,
+				},
+			},
+		},
+		discordgo.Button{
+			Label: "Type Chart",
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("could not create follow-up button for weak: %w", err)
+	}
+
 	return &discordgo.InteractionResponseData{
 		Embeds: []*discordgo.MessageEmbed{
 			{
@@ -180,6 +215,14 @@ func (resp dexResponder) Handle(
 				Name:        "sprite.png",
 				ContentType: "image/png",
 				Reader:      reader,
+			},
+		},
+		Components: []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					learnsetButton,
+					weakButton,
+				},
 			},
 		},
 	}, nil
@@ -213,6 +256,7 @@ func (builder *Builder) dex(ctx context.Context) (Command, error) {
 	resp := dexResponder{
 		autocompleteLimit: builder.config.AutocompleteLimit,
 		emojis:            builder.emojis,
+		commands:          builder.commands,
 	}
 
 	return command[dexOptions]{
